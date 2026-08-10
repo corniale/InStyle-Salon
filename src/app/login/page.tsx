@@ -1,0 +1,85 @@
+"use client";
+
+import { useState, type FormEvent, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import { Button, Field, Input } from "@/components/ui";
+
+function LoginForm() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+
+    const { error } = await createClient().auth.signInWithPassword({ email, password });
+
+    if (error) {
+      // Specific, not raw (spec §4.5): say what happened, what to do next.
+      setError(
+        error.message.includes("Invalid login credentials")
+          ? "Email or password is wrong. Check both and try again."
+          : "Could not sign in. Check the connection and try again.",
+      );
+      setBusy(false);
+      return;
+    }
+
+    router.replace(params.get("next") ?? "/");
+    router.refresh();
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
+      <div>
+        <span className="text-[20px] font-bold tracking-tight">
+          in<span className="text-brand-red">Style</span>
+        </span>
+        <p className="mt-1 text-[13px] text-text-muted">Sign in to continue</p>
+      </div>
+
+      <Field label="Email">
+        <Input
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          autoFocus
+        />
+      </Field>
+
+      <Field label="Password" error={error ?? undefined}>
+        <Input
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
+      </Field>
+
+      <Button type="submit" variant="primary" busy={busy} busyLabel="Signing in" className="w-full">
+        Sign in
+      </Button>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-surface-page p-4">
+      <div className="w-full max-w-sm rounded-[4px] border border-border bg-surface-card p-8">
+        <Suspense>
+          <LoginForm />
+        </Suspense>
+      </div>
+    </div>
+  );
+}
