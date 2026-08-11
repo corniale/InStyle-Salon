@@ -6,7 +6,8 @@
 //
 // Every place that shows revenue also shows what was kept (§1.1).
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -25,11 +26,19 @@ function todayISO(): string {
 type Range = "today" | "month";
 
 export default function DashboardPage() {
-  const { branchId } = useSession();
+  const { branchId, canSeeAnalytics } = useSession();
+  const router = useRouter();
   const [range, setRange] = useState<Range>("today");
+
+  // Front desk has no analytics (spec §3); their home is the ticket list.
+  useEffect(() => {
+    if (!canSeeAnalytics) router.replace("/tickets");
+  }, [canSeeAnalytics, router]);
 
   const from = range === "today" ? todayISO() : monthStartISO();
   const to = todayISO();
+
+  if (!canSeeAnalytics) return null;
 
   return (
     <div className="space-y-6">

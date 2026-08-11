@@ -2,10 +2,12 @@
 
 // Client profile: identity, visit history, package balances, and the merge
 // flow (edge case 3) — both histories kept, the loser marked merged_into_id.
+// Addressed as /clients/detail?id=… because the app is statically exported;
+// a dynamic segment would need every id known at build time.
 
-import { use, useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -35,8 +37,16 @@ interface RetentionRow {
   status: string;
 }
 
-export default function ClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function ClientDetailPage() {
+  return (
+    <Suspense>
+      <ClientDetail />
+    </Suspense>
+  );
+}
+
+function ClientDetail() {
+  const id = useSearchParams().get("id") ?? "";
   const router = useRouter();
   const { isManagerUp, canSeeAnalytics, branches } = useSession();
   const [mergeOpen, setMergeOpen] = useState(false);
@@ -80,7 +90,7 @@ export default function ClientDetailPage({ params }: { params: Promise<{ id: str
         <EmptyState
           message="This record was merged into another client."
           action={
-            <Link href={`/clients/${client.merged_into_id}`}>
+            <Link href={`/clients/detail?id=${client.merged_into_id}`}>
               <Button variant="primary">Open the surviving record</Button>
             </Link>
           }
@@ -199,7 +209,7 @@ export default function ClientDetailPage({ params }: { params: Promise<{ id: str
         open={mergeOpen}
         loser={client}
         onClose={() => setMergeOpen(false)}
-        onDone={(winnerId) => router.push(`/clients/${winnerId}`)}
+        onDone={(winnerId) => router.push(`/clients/detail?id=${winnerId}`)}
       />
     </div>
   );

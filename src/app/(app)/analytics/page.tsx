@@ -248,7 +248,7 @@ function AtRiskList({ branchId }: { branchId: string | null }) {
               {q.data.map((r) => (
                 <tr key={r.client_id}>
                   <Td>
-                    <Link href={`/clients/${r.client_id}`} className="font-bold hover:underline">
+                    <Link href={`/clients/detail?id=${r.client_id}`} className="font-bold hover:underline">
                       <Truncate text={r.full_name ?? (r.phone_declined ? "Walk-in" : r.phone)} />
                     </Link>
                   </Td>

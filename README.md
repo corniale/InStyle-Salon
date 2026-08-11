@@ -33,6 +33,16 @@ scripts/scan-secrets.mjs build-time scan: no secrets in client code
 scripts/import/        idempotent Jan–Jul 2026 history import
 ```
 
+## Hosting
+
+The app builds to a static export (`next build` → `out/`) and deploys to
+GitHub Pages automatically on every push to the working branch
+(`.github/workflows/deploy-pages.yml`). Live at
+`https://corniale.github.io/InStyle-Salon/`. All data access happens from
+the browser against Supabase; the anon key in the workflow is public by
+design and RLS is the control. Auth gating is client-side
+(`src/app/(app)/layout.tsx`) — a convenience, not the security boundary.
+
 ## Setup
 
 1. Create a Supabase project, then apply migrations in order:

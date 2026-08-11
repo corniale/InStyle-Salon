@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, Suspense } from "react";
+import { useEffect, useState, type FormEvent, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button, Field, Input } from "@/components/ui";
@@ -12,6 +12,17 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Statically hosted, so no server redirect: an already-signed-in visitor
+  // is sent through to the app from here.
+  useEffect(() => {
+    void createClient()
+      .auth.getUser()
+      .then(({ data: { user } }) => {
+        if (user) router.replace(params.get("next") ?? "/");
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();

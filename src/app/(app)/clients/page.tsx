@@ -123,7 +123,7 @@ export default function ClientsPage() {
                   return (
                     <tr key={c.id}>
                       <Td>
-                        <Link href={`/clients/${c.id}`} className="font-bold hover:underline">
+                        <Link href={`/clients/detail?id=${c.id}`} className="font-bold hover:underline">
                           <Truncate text={c.full_name ?? (c.phone_declined ? "Walk-in" : c.phone)} />
                         </Link>
                       </Td>
