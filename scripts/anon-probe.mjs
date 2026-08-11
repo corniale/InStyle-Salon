@@ -5,10 +5,27 @@
 //   NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_ANON_KEY=... \
 //   node scripts/anon-probe.mjs
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+import { readFileSync } from "node:fs";
+
+// Fall back to .env.local so the probe runs with the same values as the app.
+function envOrDotfile(name) {
+  if (process.env[name]) return process.env[name];
+  try {
+    const line = readFileSync(".env.local", "utf8")
+      .split("\n")
+      .find((l) => l.startsWith(`${name}=`));
+    return line?.slice(name.length + 1).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+const url = envOrDotfile("NEXT_PUBLIC_SUPABASE_URL");
+const anon = envOrDotfile("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 if (!url || !anon) {
-  console.error("Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.");
+  console.error(
+    "Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, or run from the project root where .env.local lives.",
+  );
   process.exit(1);
 }
 
