@@ -23,7 +23,29 @@ function todayISO(): string {
   return new Date().toLocaleDateString("sv-SE");
 }
 
-type Range = "today" | "month";
+type Range = "today" | "month" | string; // string = a past month, "2026-07"
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** The 12 months before the current one, newest first: [["2026-07", "Jul 2026"], …] */
+function pastMonths(): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const d = new Date();
+  for (let i = 1; i <= 12; i++) {
+    const m = new Date(d.getFullYear(), d.getMonth() - i, 1);
+    out.push([
+      `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}`,
+      `${MONTH_LABELS[m.getMonth()]} ${m.getFullYear()}`,
+    ]);
+  }
+  return out;
+}
+
+function monthEndISO(ym: string): string {
+  const [y, m] = ym.split("-").map(Number);
+  return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+}
 
 export default function DashboardPage() {
   const { branchId, canSeeAnalytics } = useSession();
@@ -35,8 +57,12 @@ export default function DashboardPage() {
     if (!canSeeAnalytics) router.replace("/tickets");
   }, [canSeeAnalytics, router]);
 
-  const from = range === "today" ? todayISO() : monthStartISO();
-  const to = todayISO();
+  const isPastMonth = range !== "today" && range !== "month";
+  const from =
+    range === "today" ? todayISO()
+    : range === "month" ? monthStartISO()
+    : `${range}-01`;
+  const to = isPastMonth ? monthEndISO(range) : todayISO();
 
   if (!canSeeAnalytics) return null;
 
@@ -56,14 +82,28 @@ export default function DashboardPage() {
               {r === "today" ? "Today" : "This month"}
             </button>
           ))}
+          <select
+            aria-label="Past month"
+            value={isPastMonth ? range : ""}
+            onChange={(e) => { if (e.target.value) setRange(e.target.value); }}
+            className={`h-8 border-l border-border px-2 text-[13px] outline-none ${
+              isPastMonth ? "bg-ink font-bold text-white" : "bg-surface-card text-text-body"
+            }`}
+          >
+            <option value="">Past month…</option>
+            {pastMonths().map(([ym, label]) => (
+              <option key={ym} value={ym}>{label}</option>
+            ))}
+          </select>
         </div>
       </div>
 
       <SummaryTiles branchId={branchId} from={from} to={to} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <PaceTile branchId={branchId} />
-        <SalesTrendTile branchId={branchId} />
+        <PaceTile branchId={branchId} month={isPastMonth ? `${range}-01` : null} />
+        <SalesTrendTile branchId={branchId}
+          from={isPastMonth ? from : null} to={isPastMonth ? to : null} />
         <ServiceTile branchId={branchId} from={from} to={to} />
         <PaymentMixTile branchId={branchId} from={from} to={to} />
         <RetentionTile branchId={branchId} />
@@ -156,14 +196,14 @@ interface Pace {
   days_in_month: number;
 }
 
-function PaceTile({ branchId }: { branchId: string | null }) {
+function PaceTile({ branchId, month }: { branchId: string | null; month: string | null }) {
   const q = useQuery(async () => {
-    const res = await createClient().rpc("f_pace_vs_target", { p_branch: branchId, p_month: null });
+    const res = await createClient().rpc("f_pace_vs_target", { p_branch: branchId, p_month: month });
     return unwrap(res) as Pace;
-  }, [branchId]);
+  }, [branchId, month]);
 
   return (
-    <Card title="Pace vs monthly target">
+    <Card title={month ? "Result vs monthly target" : "Pace vs monthly target"}>
       {q.status === "loading" && <SkeletonRows rows={3} cols={2} />}
       {q.status === "error" && <ErrorState message="Pace did not load." onRetry={q.retry} />}
       {q.status === "ready" && (
@@ -172,24 +212,24 @@ function PaceTile({ branchId }: { branchId: string | null }) {
             No monthly target set. Set one in Settings to see pace.
           </p>
         ) : (
-          <PaceBody p={q.data} />
+          <PaceBody p={q.data} past={month != null} />
         )
       )}
     </Card>
   );
 }
 
-function PaceBody({ p }: { p: Pace }) {
+function PaceBody({ p, past }: { p: Pace; past: boolean }) {
   const behind = p.pace_pct != null && p.pace_pct < 95;
   const ahead = p.pace_pct != null && p.pace_pct >= 105;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-4">
-        <Stat label="Month to date" value={formatCentavos(p.revenue_cents)} />
+        <Stat label={past ? "Month total" : "Month to date"} value={formatCentavos(p.revenue_cents)} />
         <Stat
-          label="Expected by today"
+          label={past ? "Target" : "Expected by today"}
           value={formatCentavos(p.expected_to_date_cents)}
-          sub={`day ${p.days_elapsed} of ${p.days_in_month}`}
+          sub={past ? `${p.days_in_month} days` : `day ${p.days_elapsed} of ${p.days_in_month}`}
         />
         <Stat
           label="Pace"
@@ -219,16 +259,20 @@ function PaceBody({ p }: { p: Pace }) {
 
 interface DailyRow { day: string; revenue_cents: number | null; company_share_cents: number | null; tickets: number | null }
 
-function SalesTrendTile({ branchId }: { branchId: string | null }) {
+function SalesTrendTile({ branchId, from, to }: {
+  branchId: string | null;
+  from: string | null;
+  to: string | null;
+}) {
   const q = useQuery(async () => {
     const res = await createClient().rpc("f_daily_series", {
-      p_branch: branchId, p_from: null, p_to: null,
+      p_branch: branchId, p_from: from, p_to: to,
     });
     return unwrap(res) as DailyRow[];
-  }, [branchId]);
+  }, [branchId, from, to]);
 
   return (
-    <Card title="Last 30 days">
+    <Card title={from ? "Daily sales" : "Last 30 days"}>
       {q.status === "loading" && <SkeletonRows rows={5} cols={3} />}
       {q.status === "error" && <ErrorState message="The sales trend did not load." onRetry={q.retry} />}
       {q.status === "ready" && (
