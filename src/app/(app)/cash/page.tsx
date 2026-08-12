@@ -161,6 +161,8 @@ export default function CashPage() {
         )}
       </Card>
 
+      <TechnicianEarningsCard branchId={effectiveBranch} date={date} />
+
       <ExpensesCard
         branchId={effectiveBranch}
         date={date}
@@ -237,12 +239,14 @@ function ExpensesCard({ branchId, date, locked, expenses, error, onChanged }: {
       {!locked && (
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <Field label="Category">
-            <Select value={category} onChange={(e) => setCategory(e.target.value)} className="w-36">
+            <Select value={category} onChange={(e) => setCategory(e.target.value)} className="w-44">
               <option value="supplies">Supplies</option>
               <option value="utilities">Utilities</option>
               <option value="food">Food</option>
               <option value="transport">Transport</option>
               <option value="maintenance">Maintenance</option>
+              <option value="withdrawal">Withdrawal / bank deposit</option>
+              <option value="allowance">Staff allowance / sahod</option>
               <option value="other">Other</option>
             </Select>
           </Field>
@@ -379,5 +383,113 @@ function CloseModal({ open, branchId, date, expected, onClose, onDone }: {
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Technician earnings for the day — the payout grid from the salon's
+// "Daily Record" sheet. Company share and technician share per person, so
+// payday needs no side spreadsheet. Payroll itself stays a non-goal.
+// ---------------------------------------------------------------------------
+
+interface EarningsRow {
+  technician_name: string;
+  lines: number;
+  treatments: number;
+  revenue_cents: number;
+  company_share_cents: number;
+  technician_share_cents: number;
+}
+
+function TechnicianEarningsCard({ branchId, date }: { branchId: string; date: string }) {
+  const q = useQuery(async () => {
+    const res = await createClient()
+      .from("v_ticket_lines_active")
+      .select("technician_name, qty, total_cents, company_share_cents, technician_share_cents")
+      .eq("branch_id", branchId)
+      .eq("ticket_date", date);
+    const lines = unwrap(res) as Array<{
+      technician_name: string;
+      qty: number;
+      total_cents: number;
+      company_share_cents: number;
+      technician_share_cents: number;
+    }>;
+    const byTech = new Map<string, EarningsRow>();
+    for (const l of lines) {
+      const row = byTech.get(l.technician_name) ?? {
+        technician_name: l.technician_name,
+        lines: 0, treatments: 0, revenue_cents: 0,
+        company_share_cents: 0, technician_share_cents: 0,
+      };
+      row.lines += 1;
+      row.treatments += l.qty;
+      row.revenue_cents += l.total_cents;
+      row.company_share_cents += l.company_share_cents;
+      row.technician_share_cents += l.technician_share_cents;
+      byTech.set(l.technician_name, row);
+    }
+    return [...byTech.values()].sort(
+      (a, b) => b.technician_share_cents - a.technician_share_cents,
+    );
+  }, [branchId, date]);
+
+  return (
+    <Card title="Technician earnings">
+      {q.status === "loading" && <SkeletonRows rows={4} cols={5} />}
+      {q.status === "error" && (
+        <ErrorState message="Technician earnings did not load." onRetry={q.retry} />
+      )}
+      {q.status === "ready" && q.data.length === 0 && (
+        <EmptyState message="No services recorded this day." />
+      )}
+      {q.status === "ready" && q.data.length > 0 && (
+        <>
+          <Table>
+            <thead>
+              <tr>
+                <Th>Technician</Th>
+                <Th align="right">Treatments</Th>
+                <Th align="right">Gross</Th>
+                <Th align="right">Company share</Th>
+                <Th align="right">Technician share</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.map((r) => (
+                <tr key={r.technician_name}>
+                  <Td className="font-bold"><Truncate text={r.technician_name} /></Td>
+                  <Td align="right" className="tnum">{r.treatments}</Td>
+                  <Td align="right" className="tnum">{formatCentavos(r.revenue_cents)}</Td>
+                  <Td align="right" className="tnum">{formatCentavos(r.company_share_cents)}</Td>
+                  <Td align="right" className="tnum font-bold">
+                    {formatCentavos(r.technician_share_cents)}
+                  </Td>
+                </tr>
+              ))}
+              <tr>
+                <Td className="font-bold">Total</Td>
+                <Td align="right" className="tnum font-bold">
+                  {q.data.reduce((s, r) => s + r.treatments, 0)}
+                </Td>
+                <Td align="right" className="tnum font-bold">
+                  {formatCentavos(q.data.reduce((s, r) => s + r.revenue_cents, 0))}
+                </Td>
+                <Td align="right" className="tnum font-bold">
+                  {formatCentavos(q.data.reduce((s, r) => s + r.company_share_cents, 0))}
+                </Td>
+                <Td align="right" className="tnum font-bold">
+                  {formatCentavos(q.data.reduce((s, r) => s + r.technician_share_cents, 0))}
+                </Td>
+              </tr>
+            </tbody>
+          </Table>
+          <p className="mt-2 text-[11px] text-text-muted">
+            Shares as recorded on each service line. Assist (banlaw) hand-offs between staff are
+            settled between them and not deducted here.
+          </p>
+        </>
+      )}
+    </Card>
   );
 }
