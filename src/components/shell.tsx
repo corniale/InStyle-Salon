@@ -21,7 +21,10 @@ const accentColor: Record<string, string> = {
 };
 
 export function Shell({ children }: { children: React.ReactNode }) {
-  const { profile, branches, branchId, setBranchId, branch, isOwner, canSeeAnalytics } = useSession();
+  const {
+    profile, businesses, businessId, setBusinessId, business,
+    branches, branchId, setBranchId, branch, isOwner, canSeeAnalytics,
+  } = useSession();
   const pathname = usePathname();
   const pending = usePendingSyncCount();
 
@@ -102,11 +105,25 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-ink" />
             )}
             <span className="text-[13px] text-text-muted">
+              {businesses.length > 1 && business ? `${business.name} · ` : ""}
               {branch ? branch.name : "All branches"}
             </span>
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Business picker appears only once a second business exists. */}
+            {businesses.length > 1 && (
+              <select
+                aria-label="Business"
+                value={businessId ?? ""}
+                onChange={(e) => setBusinessId(e.target.value)}
+                className="h-8 rounded-[4px] border border-border bg-surface-card px-2 text-[13px]"
+              >
+                {businesses.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            )}
             {pending > 0 && (
               <span
                 className="rounded-[4px] bg-brand-red-tint px-2 py-1 text-[11px] text-brand-red-deep"

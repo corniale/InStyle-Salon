@@ -59,7 +59,7 @@ function todayISO(): string {
 }
 
 export default function ComparePage() {
-  const { canSeeAnalytics, isOwner } = useSession();
+  const { canSeeAnalytics, isOwner, businessId, business, businesses } = useSession();
   const [from, setFrom] = useState(monthStartISO());
   const [to, setTo] = useState(todayISO());
 
@@ -73,7 +73,10 @@ export default function ComparePage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-[20px] font-bold">Branch comparison</h1>
+        <h1 className="text-[20px] font-bold">
+          Branch comparison
+          {businesses.length > 1 && business ? ` — ${business.name}` : ""}
+        </h1>
         <div className="flex items-center gap-2">
           <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
             className="w-40" aria-label="From" />
@@ -83,17 +86,21 @@ export default function ComparePage() {
         </div>
       </div>
 
-      <HeadToHead from={from} to={to} />
-      <ServiceMatrix from={from} to={to} />
+      {/* Scoped to one business on purpose: a spa vs a barbershop row would
+          compare nothing meaningful. Cross-business is the dashboard's job. */}
+      <HeadToHead businessId={businessId} from={from} to={to} />
+      <ServiceMatrix businessId={businessId} from={from} to={to} />
     </div>
   );
 }
 
-function HeadToHead({ from, to }: { from: string; to: string }) {
+function HeadToHead({ businessId, from, to }: { businessId: string | null; from: string; to: string }) {
   const q = useQuery(async () => {
-    const res = await createClient().rpc("f_branch_comparison", { p_from: from, p_to: to });
+    const res = await createClient().rpc("f_branch_comparison", {
+      p_business: businessId, p_from: from, p_to: to,
+    });
     return unwrap(res) as BranchRow[];
-  }, [from, to]);
+  }, [businessId, from, to]);
 
   return (
     <Card title="Head to head">
@@ -161,11 +168,13 @@ function CompareRow({ label, values, bold }: { label: string; values: string[]; 
   );
 }
 
-function ServiceMatrix({ from, to }: { from: string; to: string }) {
+function ServiceMatrix({ businessId, from, to }: { businessId: string | null; from: string; to: string }) {
   const q = useQuery(async () => {
-    const res = await createClient().rpc("f_service_branch_matrix", { p_from: from, p_to: to });
+    const res = await createClient().rpc("f_service_branch_matrix", {
+      p_business: businessId, p_from: from, p_to: to,
+    });
     return unwrap(res) as MatrixRow[];
-  }, [from, to]);
+  }, [businessId, from, to]);
 
   return (
     <Card title="Service by branch">

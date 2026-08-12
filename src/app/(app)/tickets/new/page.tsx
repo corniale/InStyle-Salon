@@ -340,11 +340,20 @@ export default function NewTicketPage() {
     );
   }
 
-  const { types, services, technicians } = ref.data;
-  const branchTechnicians = technicians.filter((t) => t.branch_id === formBranchId);
+  const { services, technicians } = ref.data;
+  // The catalogue and roster are pinned to the branch's business — a spa
+  // service or barbershop technician never appears on a salon ticket. The
+  // database enforces the same rule (0009 business_mismatch guard).
+  const formBusiness = branches.find((b) => b.id === formBranchId)?.business_id;
+  const types = ref.data.types.filter((t) => t.business_id === formBusiness);
+  const businessBranchIds = new Set(
+    branches.filter((b) => b.business_id === formBusiness).map((b) => b.id),
+  );
+  const businessTechnicians = technicians.filter((t) => businessBranchIds.has(t.branch_id));
+  const branchTechnicians = businessTechnicians.filter((t) => t.branch_id === formBranchId);
   // Technicians from the other branch may appear on this branch's tickets
   // (spec §7.1); they are listed after their own branch's people.
-  const visitingTechnicians = technicians.filter((t) => t.branch_id !== formBranchId);
+  const visitingTechnicians = businessTechnicians.filter((t) => t.branch_id !== formBranchId);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">

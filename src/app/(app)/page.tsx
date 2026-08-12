@@ -426,11 +426,11 @@ interface Divergence {
 }
 
 function PriceDivergenceTile() {
-  const { isOwner } = useSession();
+  const { isOwner, businessId } = useSession();
   const q = useQuery(async () => {
-    const res = await createClient().rpc("f_price_divergence");
+    const res = await createClient().rpc("f_price_divergence", { p_business: businessId });
     return unwrap(res) as Divergence[];
-  }, []);
+  }, [businessId]);
 
   if (!isOwner || q.status !== "ready" || q.data.length === 0) return null;
 

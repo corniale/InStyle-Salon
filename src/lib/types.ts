@@ -10,8 +10,17 @@ export interface Profile {
   active: boolean;
 }
 
+export interface Business {
+  id: string;
+  name: string;
+  code: string;
+  sort_order: number;
+  active: boolean;
+}
+
 export interface Branch {
   id: string;
+  business_id: string;
   name: string;
   code: string;
   accent: "slate" | "plum";
@@ -21,6 +30,7 @@ export interface Branch {
 
 export interface ServiceType {
   id: string;
+  business_id: string;
   name: string;
   sort_order: number;
 }

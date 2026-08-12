@@ -12,12 +12,12 @@ import { createClient } from "@/lib/supabase/client";
 import { SessionProvider } from "@/components/session-context";
 import { Shell } from "@/components/shell";
 import { ErrorState } from "@/components/ui";
-import type { Branch, Profile } from "@/lib/types";
+import type { Branch, Business, Profile } from "@/lib/types";
 
 type GateState =
   | { status: "checking" }
   | { status: "error"; message: string }
-  | { status: "ready"; profile: Profile; branches: Branch[] };
+  | { status: "ready"; profile: Profile; businesses: Business[]; branches: Branch[] };
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -41,8 +41,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const [profileRes, branchesRes] = await Promise.all([
+      const [profileRes, businessesRes, branchesRes] = await Promise.all([
         supabase.from("profiles").select("*").eq("id", user.id).single(),
+        supabase.from("businesses").select("*").eq("active", true).order("sort_order"),
         supabase.from("branches").select("*").eq("active", true).order("code"),
       ]);
 
@@ -54,15 +55,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         router.replace("/login");
         return;
       }
-      if (branchesRes.error) {
+      if (branchesRes.error || businessesRes.error) {
         setState({ status: "error", message: "The branch list did not load." });
         return;
       }
 
+      const branches = (branchesRes.data ?? []) as Branch[];
+      // Only businesses the user can actually see a branch of (RLS already
+      // filtered the branches; this keeps the picker honest for managers).
+      const visibleBusinessIds = new Set(branches.map((b) => b.business_id));
+      const businesses = ((businessesRes.data ?? []) as Business[]).filter((b) =>
+        visibleBusinessIds.has(b.id),
+      );
+
       setState({
         status: "ready",
         profile: profileRes.data as Profile,
-        branches: (branchesRes.data ?? []) as Branch[],
+        businesses,
+        branches,
       });
     })();
 
@@ -97,7 +107,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <SessionProvider profile={state.profile} branches={state.branches}>
+    <SessionProvider
+      profile={state.profile}
+      businesses={state.businesses}
+      branches={state.branches}
+    >
       <Shell>{children}</Shell>
     </SessionProvider>
   );

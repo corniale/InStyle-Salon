@@ -6,12 +6,19 @@
 // the switcher simply reflects that (edge case 35 is enforced server-side).
 
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
-import type { Branch, Profile } from "@/lib/types";
+import type { Branch, Business, Profile } from "@/lib/types";
 
 interface SessionState {
   profile: Profile;
+  /** Businesses the signed-in user can see at least one branch of. */
+  businesses: Business[];
+  /** The selected business. Never null once loaded. */
+  businessId: string | null;
+  setBusinessId: (id: string) => void;
+  business: Business | null;
+  /** Branches of the selected business. */
   branches: Branch[];
-  /** null = consolidated (owner only) */
+  /** null = consolidated across the selected business (owner only) */
   branchId: string | null;
   setBranchId: (id: string | null) => void;
   branch: Branch | null;
@@ -22,20 +29,36 @@ interface SessionState {
 
 const SessionContext = createContext<SessionState | null>(null);
 
-export function SessionProvider({ profile, branches, children }: {
+export function SessionProvider({ profile, businesses, branches, children }: {
   profile: Profile;
+  businesses: Business[];
   branches: Branch[];
   children: ReactNode;
 }) {
+  const homeBranch = branches.find((b) => b.id === profile.branch_id) ?? null;
+  const [businessId, setBusinessIdState] = useState<string | null>(
+    homeBranch?.business_id ?? businesses[0]?.id ?? null,
+  );
   const [branchId, setBranchId] = useState<string | null>(
     profile.role === "owner" ? null : profile.branch_id,
   );
 
   const value = useMemo<SessionState>(() => {
     const isOwner = profile.role === "owner";
+    const visibleBranches = branches.filter((b) => b.business_id === businessId);
     return {
       profile,
-      branches,
+      businesses,
+      businessId,
+      setBusinessId: (id) => {
+        // Switching business resets the branch view to consolidated; a
+        // non-owner is pinned to their own business by their branch anyway.
+        if (!isOwner && id !== homeBranch?.business_id) return;
+        setBusinessIdState(id);
+        setBranchId(isOwner ? null : profile.branch_id);
+      },
+      business: businesses.find((b) => b.id === businessId) ?? null,
+      branches: visibleBranches,
       branchId,
       setBranchId: (id) => {
         // Non-owners cannot leave their branch; the UI never offers it, and
@@ -43,13 +66,13 @@ export function SessionProvider({ profile, branches, children }: {
         if (!isOwner && id !== profile.branch_id) return;
         setBranchId(id);
       },
-      branch: branches.find((b) => b.id === branchId) ?? null,
+      branch: visibleBranches.find((b) => b.id === branchId) ?? null,
       isOwner,
       isManagerUp: isOwner || profile.role === "manager",
       // Front desk: ticket entry, clients, expenses. No analytics (spec §3).
       canSeeAnalytics: isOwner || profile.role === "manager",
     };
-  }, [profile, branches, branchId]);
+  }, [profile, businesses, branches, businessId, branchId, homeBranch]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

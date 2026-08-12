@@ -67,13 +67,14 @@ function SettingsBody() {
 // ---------------------------------------------------------------------------
 
 function ServicesTab({ branches }: { branches: Branch[] }) {
+  const { businessId } = useSession();
   const [editing, setEditing] = useState<{ service: Service; branch: Branch; current: number | null } | null>(null);
   const [rateEditing, setRateEditing] = useState<Service | null>(null);
 
   const q = useQuery(async () => {
     const supabase = createClient();
     const today = new Date().toLocaleDateString("sv-SE");
-    const [types, services, prices] = await Promise.all([
+    const [typesRes, servicesRes, prices] = await Promise.all([
       supabase.from("service_types").select("*").order("sort_order"),
       supabase.from("services").select("*").order("name"),
       supabase
@@ -87,12 +88,17 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
       const key = `${p.branch_id}:${p.service_id}`;
       if (!priceMap.has(key)) priceMap.set(key, p);
     }
+    // Only the selected business's catalogue is editable here.
+    const types = (unwrap(typesRes) as ServiceType[]).filter(
+      (t) => t.business_id === businessId,
+    );
+    const typeIds = new Set(types.map((t) => t.id));
     return {
-      types: unwrap(types) as ServiceType[],
-      services: unwrap(services) as Service[],
+      types,
+      services: (unwrap(servicesRes) as Service[]).filter((s) => typeIds.has(s.service_type_id)),
       priceMap,
     };
-  }, []);
+  }, [businessId]);
 
   if (q.status === "loading") return <Card><SkeletonRows rows={10} cols={5} /></Card>;
   if (q.status === "error") {
