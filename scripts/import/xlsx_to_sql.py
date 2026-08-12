@@ -85,10 +85,12 @@ def read_file(path, branch):
     it = ws.iter_rows(values_only=True)
     header = [str(h).strip().upper() if h else "" for h in next(it)]
 
-    def col(*names):
+    def col(*names, optional=False):
         for n in names:
             if n in header:
                 return header.index(n)
+        if optional:
+            return None
         raise SystemExit(f"{path}: none of {names} in header {header}")
 
     ix = {
@@ -98,9 +100,21 @@ def read_file(path, branch):
         "service": col("SERVICE"), "type": col("TYPE OF SERVICE"),
         "amount": col("AMOUNT"), "no": col("NO."), "total": col("TOTAL AMOUNT"),
         "sharing": col("SHARING"), "company": col("COMPANY SHARE"),
-        "tech": col("TECHNICIAN"), "assist": col("ASSIST", "ASSIST (BANLAW)"),
+        "tech": col("TECHNICIAN"),
+        "assist": col("ASSIST", "ASSIST (BANLAW)", "MINUS ASSIST", optional=True),
         "rate": col("RATE"),
+        # June 2026 onward: the salon upgraded its own tracking.
+        "series": col("SERIES NO.", optional=True),
+        "assisted_by": col("ASSITED BY", "ASSISTED BY", optional=True),
+        "disc_type": col("TYPE OF DISCOUNT", optional=True),
+        "disc_amount": col("DISCOUNT AMOUNT", optional=True),
+        "online_method": col("ONLINE PAYMENT", optional=True),
+        "online_amount": col("ONLINE PYMNT AMOUNT", "ONLINE PAYMENT AMOUNT", optional=True),
     }
+
+    def opt(r, key):
+        i = ix[key]
+        return r[i] if i is not None else None
 
     rows, skipped = [], []
     last_date = None
@@ -153,10 +167,18 @@ def read_file(path, branch):
             "total_cents": int(round(float(total) * 100)),
             "company_cents": int(round(float(company) * 100)) if isinstance(company, (int, float)) else None,
             "tech": norm_name(tech),
-            "assist_cents": int(round(float(r[ix["assist"]]) * 100))
-                if isinstance(r[ix["assist"]], (int, float)) else None,
+            "assist_cents": int(round(float(opt(r, "assist")) * 100))
+                if isinstance(opt(r, "assist"), (int, float)) else None,
             "rating": rating,
             "branch": branch,
+            "series": (lambda v: re.sub(r"\.0$", "", str(v).strip()) if v is not None else None)(opt(r, "series")),
+            "assisted_by": norm_name(opt(r, "assisted_by")) if opt(r, "assisted_by") else None,
+            "disc_type": str(opt(r, "disc_type")).strip().upper() if opt(r, "disc_type") else None,
+            "disc_amount_cents": int(round(float(opt(r, "disc_amount")) * 100))
+                if isinstance(opt(r, "disc_amount"), (int, float)) else None,
+            "online_method": str(opt(r, "online_method")).strip().upper() if opt(r, "online_method") else None,
+            "online_amount_cents": int(round(float(opt(r, "online_amount")) * 100))
+                if isinstance(opt(r, "online_amount"), (int, float)) else None,
         })
     return rows, skipped, read_target(wb)
 
@@ -206,26 +228,99 @@ def main():
         if not ok:
             unfit += 1
 
-    # qty * unit - discount must equal the workbook total exactly.
-    for r in all_rows:
-        qty, total = r["qty"], r["total_cents"]
-        unit = r["amount_cents"]
-        if unit is None or unit * qty < total:
-            unit = -(-total // qty)  # ceil division
-        r["unit_cents"] = unit
-        r["discount_cents"] = unit * qty - total
-
-    # Ticket keys: named rows group per (branch, date, name); anonymous rows
-    # are one ticket each, disambiguated by an occurrence counter.
+    # Ticket keys: the source's own series number is the strongest grouping
+    # (June onward); before that, named rows group per (branch, date, name);
+    # anonymous tallies are one ticket each.
     occurrence = Counter()
     for r in all_rows:
-        if r["name"]:
+        if r["series"]:
+            # Series numbers occasionally serve two clients (families on one
+            # job order) or repeat across dates, so date and name are part of
+            # the identity.
+            who = hashlib.sha1(norm_name(r["name"]).encode()).hexdigest()[:12] if r["name"] else "anon"
+            key = f"import:{r['branch']}:S:{r['series']}:{r['date']}:{who}"
+        elif r["name"]:
             key = f"import:{r['branch']}:{r['date']}:N:{hashlib.sha1(norm_name(r['name']).encode()).hexdigest()[:16]}"
         else:
             sig = f"{r['branch']}|{r['date']}|{r['service']}|{r['tech']}|{r['qty']}|{r['total_cents']}"
             occurrence[sig] += 1
             key = f"import:{r['branch']}:{r['date']}:R:{hashlib.sha1(f'{sig}|{occurrence[sig]}'.encode()).hexdigest()[:16]}"
         r["ticket_key"] = key
+
+    # ---------------------------------------------------------------- tickets
+    # Ticket-level facts: discount allocation and the payment legs.
+    DISC_MAP = {"STAFF DISC.": "staff", "SENIOR": "senior", "PWD": "pwd"}
+    METHOD_MAP = {"GCASH": "gcash", "MAYA": "maya"}
+    by_ticket = defaultdict(list)
+    for r in all_rows:
+        by_ticket[r["ticket_key"]].append(r)
+
+    ticket_pay = {}      # key -> list of (method, cents)
+    ticket_summary = {}  # key -> payment_method for the ticket header
+    for key, rows in by_ticket.items():
+        gross = sum(x["total_cents"] for x in rows)
+
+        # Ticket discount: recorded once on one row of the ticket (verified
+        # against DISCOUNT RATE x gross). Allocate pro-rata by line gross,
+        # largest remainder, so the cents sum exactly.
+        disc = sum(x["disc_amount_cents"] or 0 for x in rows)
+        disc = min(disc, gross)
+        if disc > 0 and gross > 0:
+            shares = [(x["total_cents"] * disc) // gross for x in rows]
+            rem = disc - sum(shares)
+            order = sorted(range(len(rows)),
+                           key=lambda i: (rows[i]["total_cents"] * disc) % gross,
+                           reverse=True)
+            for i in order[:rem]:
+                shares[i] += 1
+            dtype = next((x["disc_type"] for x in rows if x["disc_type"]), None)
+            mapped = DISC_MAP.get(dtype or "", "promo")
+            for x, extra in zip(rows, shares):
+                x["alloc_disc_cents"] = extra
+                x["alloc_disc_type"] = mapped if extra > 0 else None
+        else:
+            for x in rows:
+                x["alloc_disc_cents"] = 0
+                x["alloc_disc_type"] = None
+
+        net = gross - disc
+
+        # Online legs: usually repeated per line (sum == net), sometimes the
+        # ticket total written once (max == net-ish). Clamp to net.
+        cells = [x["online_amount_cents"] for x in rows if x["online_amount_cents"]]
+        method = next((METHOD_MAP.get(x["online_method"] or "")
+                       for x in rows if x["online_method"]), None)
+        online = 0
+        if cells and method:
+            s, mx = sum(cells), max(cells)
+            online = s if s <= net else (mx if mx <= net else net)
+        cash = net - online
+        legs = []
+        if cash > 0:
+            legs.append(("cash", cash))
+        if online > 0:
+            legs.append((method, online))
+        if not legs:
+            legs = [("cash", 0)]  # fully-discounted comp ticket
+        ticket_pay[key] = legs
+        ticket_summary[key] = ("split" if len(legs) > 1
+                               else ("cash" if legs[0][0] == "cash" else "online"))
+
+    # qty * unit - discount must equal the collected (net) amount exactly:
+    # negotiated difference from the price column, plus the ticket discount
+    # allocated to this line.
+    for r in all_rows:
+        qty, gross = r["qty"], r["total_cents"]
+        unit = r["amount_cents"]
+        if unit is None or unit * qty < gross:
+            unit = -(-gross // qty)  # ceil division
+        negotiated = unit * qty - gross
+        r["unit_cents"] = unit
+        r["net_cents"] = gross - r["alloc_disc_cents"]
+        r["discount_cents"] = negotiated + r["alloc_disc_cents"]
+        r["discount_type"] = (r["alloc_disc_type"]
+                              if r["alloc_disc_cents"] > 0
+                              else ("negotiated" if negotiated > 0 else None))
 
     # Per-service defaults: modal sharing rate, and one canonical type per
     # service name — the source files a service under different types on a
@@ -246,17 +341,30 @@ def main():
             price_votes[(r["branch"], r["service"])][r["unit_cents"]] += 1
     modal_price = {k: c.most_common(1)[0][0] for k, c in price_votes.items()}
 
-    # Validation expectations per branch-month.
-    expect = defaultdict(lambda: {"revenue": 0, "company": 0, "treatments": 0, "rows": 0})
+    # Validation expectations per branch-month. Revenue is NET of ticket
+    # discounts (what was collected); company share is the fitted rate applied
+    # to net, mirroring the database's generated column. The workbook's own
+    # gross figures are carried alongside for the report.
+    expect = defaultdict(lambda: {"revenue": 0, "company": 0, "treatments": 0, "rows": 0,
+                                  "gross": 0, "discounts": 0, "company_gross": 0, "online": 0})
     assist_total = defaultdict(int)
     for r in all_rows:
         k = (r["branch"], r["date"].strftime("%Y-%m"))
-        expect[k]["revenue"] += r["total_cents"]
-        expect[k]["company"] += r["company_cents"]
+        net = r["net_cents"]
+        exp_company = int((Decimal(net) * Decimal(r["rate6"])).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP))
+        expect[k]["revenue"] += net
+        expect[k]["company"] += exp_company
+        expect[k]["gross"] += r["total_cents"]
+        expect[k]["discounts"] += r["alloc_disc_cents"]
+        expect[k]["company_gross"] += r["company_cents"]
         expect[k]["treatments"] += r["qty"]
         expect[k]["rows"] += 1
         if r["assist_cents"]:
             assist_total[k] += r["assist_cents"]
+    for key, legs in ticket_pay.items():
+        month = (by_ticket[key][0]["branch"], by_ticket[key][0]["date"].strftime("%Y-%m"))
+        expect[month]["online"] += sum(c for m, c in legs if m != "cash")
 
     # ------------------------------------------------------------------ SQL
     out = []
@@ -270,8 +378,10 @@ create temp table _imp (
   seq int, branch text, tdate date, ticket_key text,
   cname text, brgy text, town text, oldnew text, isource text, referred text,
   service text, stype text, qty int, unit_cents bigint, discount_cents bigint,
-  rate6 numeric(8,6), tech text, rating int, total_cents bigint, company_cents bigint
-) on commit drop;""")
+  discount_type text, rate6 numeric(8,6), tech text, assist_name text,
+  rating int, net_cents bigint, series text
+) on commit drop;
+""")
 
     CHUNK = 400
     for i in range(0, len(all_rows), CHUNK):
@@ -281,10 +391,19 @@ create temp table _imp (
                 f"({seq},{q(r['branch'])},'{r['date']}',{q(r['ticket_key'])},"
                 f"{q(r['name'])},{q(r['brgy'])},{q(r['town'])},{q(r['oldnew'])},"
                 f"{q(r['source'])},{q(r['referred'])},{q(r['service'])},{q(r['type'])},"
-                f"{r['qty']},{r['unit_cents']},{r['discount_cents']},{r['rate6']},"
-                f"{q(r['tech'])},{r['rating'] if r['rating'] else 'null'},"
-                f"{r['total_cents']},{r['company_cents']})")
+                f"{r['qty']},{r['unit_cents']},{r['discount_cents']},{q(r['discount_type'])},"
+                f"{r['rate6']},{q(r['tech'])},{q(r['assisted_by'])},"
+                f"{r['rating'] if r['rating'] else 'null'},"
+                f"{r['net_cents']},{q(r['series'])})")
         w("insert into _imp values\n" + ",\n".join(vals) + ";")
+
+    pay_vals = []
+    for key, legs in sorted(ticket_pay.items()):
+        for method, cents in legs:
+            pay_vals.append(f"({q(key)},{q(method)},{cents},{q(ticket_summary[key])})")
+    w("create temp table _payx (ticket_key text, method text, cents bigint, summary text) on commit drop;")
+    for i in range(0, len(pay_vals), CHUNK):
+        w("insert into _payx values\n" + ",\n".join(pay_vals[i:i + CHUNK]) + ";")
 
     w("""
 -- Reference ids
@@ -322,11 +441,16 @@ on conflict (service_type_id, name) do nothing;
 """)
 
     w("""
--- Technicians observed in the history (branch = where they mostly worked)
+-- Technicians observed in the history (branch = where they mostly worked),
+-- including assistants named on lines
 insert into technicians (branch_id, full_name, active)
 select b.id, v.tech, true
 from (select distinct on (tech) tech, branch
-      from (select tech, branch, count(*) c from _imp group by 1, 2) x
+      from (select tech, branch, count(*) c from (
+              select tech, branch from _imp
+              union all
+              select assist_name, branch from _imp where assist_name is not null
+            ) u group by 1, 2) x
       order by tech, c desc) v
 join branches b on b.code = v.branch and b.business_id = (select biz from _ctx)
 where not exists (
@@ -385,21 +509,35 @@ on conflict (phone) do nothing;
 -- Tickets: one per ticket_key not already imported
 create temp table _new_tickets (id uuid, idempotency_key text) on commit drop;
 
-with heads as (
+with heads0 as (
   select distinct on (ticket_key)
-    ticket_key, branch, tdate, cname,
+    ticket_key, branch, tdate, cname, series,
     bool_or(oldnew = 'NEW') over (partition by ticket_key) as any_new
   from _imp
   order by ticket_key, seq
 ),
+heads as (
+  -- A paper series number occasionally covers two clients or two dates;
+  -- those become separate tickets, so duplicates get a /n suffix.
+  select h.*,
+         case
+           when series is null then null
+           when row_number() over (partition by branch, series order by tdate, ticket_key) = 1
+             then series
+           else series || '/' ||
+                row_number() over (partition by branch, series order by tdate, ticket_key)
+         end as series_unique
+  from heads0 h
+),
 ins as (
-  insert into tickets (branch_id, client_id, ticket_date, payment_method,
+  insert into tickets (branch_id, client_id, ticket_date, series_no, payment_method,
                        is_new_client, idempotency_key, created_by)
   select
     b.id,
     coalesce(nc.id, pc.id),
     h.tdate,
-    'cash',
+    h.series_unique,
+    coalesce((select px.summary from _payx px where px.ticket_key = h.ticket_key limit 1), 'cash'),
     coalesce(h.any_new, false) and h.cname is not null,
     h.ticket_key,
     (select owner from _ctx)
@@ -414,11 +552,14 @@ ins as (
 insert into _new_tickets select id, idempotency_key from ins;
 
 -- Lines for the tickets created in this run
-insert into ticket_lines (ticket_id, service_id, technician_id, qty, unit_price_cents,
+insert into ticket_lines (ticket_id, service_id, technician_id, assist_technician_id,
+                          qty, unit_price_cents,
                           discount_type, discount_cents, sharing_rate, rating, line_number)
 select
-  nt.id, s.id, tech.id, i.qty, i.unit_cents,
-  case when i.discount_cents > 0 then 'negotiated' end,
+  nt.id, s.id, tech.id,
+  case when assist.id is distinct from tech.id then assist.id end,
+  i.qty, i.unit_cents,
+  i.discount_type,
   i.discount_cents, i.rate6, i.rating,
   row_number() over (partition by nt.id order by i.seq)
 from _imp i
@@ -434,13 +575,25 @@ join lateral (
   join branches tb on tb.id = t.branch_id
   where t.full_name = i.tech and tb.business_id = (select biz from _ctx)
   order by (t.branch_id = b.id) desc limit 1
-) tech on true;
+) tech on true
+left join lateral (
+  select t.id from technicians t
+  join branches tb on tb.id = t.branch_id
+  where i.assist_name is not null and t.full_name = i.assist_name
+    and tb.business_id = (select biz from _ctx)
+  order by (t.branch_id = b.id) desc limit 1
+) assist on true;
 
--- One cash payment per new ticket
+-- Assistants named in the source but not yet on the roster become
+-- technicians first, so the join above can resolve them.
+
+-- Payment legs (cash / gcash / maya) per new ticket
 insert into ticket_payments (ticket_id, method, amount_cents)
-select nt.id, 'cash', sum(i.total_cents)
-from _imp i join _new_tickets nt on nt.idempotency_key = i.ticket_key
-group by nt.id;
+select nt.id, px.method, px.cents
+from _payx px join _new_tickets nt on nt.idempotency_key = px.ticket_key
+where px.cents > 0
+   or not exists (select 1 from _payx p2
+                  where p2.ticket_key = px.ticket_key and p2.cents > 0);
 
 -- Abort rather than commit a partial import: every staged row must have
 -- landed, and every ticket's lines must equal its payment.
@@ -511,9 +664,13 @@ commit;""")
     print(f"\nWrote {args.output} ({len(all_rows)} lines staged)", file=sys.stderr)
     print("\nExpected totals (compare with the verification query output):", file=sys.stderr)
     for (branch, month), e in sorted(expect.items()):
-        print(f"  {branch:6s} {month}  sales {e['revenue']/100:>12,.2f}  "
+        print(f"  {branch:6s} {month}  sales(net) {e['revenue']/100:>12,.2f}  "
               f"company {e['company']/100:>12,.2f}  treatments {e['treatments']:>5}  "
               f"rows {e['rows']}", file=sys.stderr)
+        if e['discounts'] or e['online']:
+            print(f"         gross {e['gross']/100:>12,.2f}  discounts {e['discounts']/100:>10,.2f}  "
+                  f"online {e['online']/100:>10,.2f}  company-if-gross {e['company_gross']/100:>12,.2f}",
+                  file=sys.stderr)
     if unfit:
         print(f"\nWARNING: {unfit} lines could not fit an exact sharing rate", file=sys.stderr)
     assumed = sum(1 for r in all_rows if r.get("company_assumed"))
