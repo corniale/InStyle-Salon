@@ -62,8 +62,12 @@ function emptyLine(): LineDraft {
 export default function NewTicketPage() {
   const router = useRouter();
   const { branchId, branches, profile } = useSession();
-  // Front desk / manager: their branch. Owner on consolidated: must pick.
-  const [formBranchId, setFormBranchId] = useState(branchId ?? profile.branch_id ?? "");
+  // Front desk / manager: their branch. Owner on consolidated: default to
+  // the first branch — a sale always happens somewhere — with the picker
+  // below to switch. An empty branch id would poison the price query.
+  const [formBranchId, setFormBranchId] = useState(
+    branchId ?? profile.branch_id ?? branches[0]?.id ?? "",
+  );
 
   // ---- reference data -----------------------------------------------------
   const ref = useQuery(async () => {
@@ -72,18 +76,20 @@ export default function NewTicketPage() {
       supabase.from("service_types").select("*").order("sort_order"),
       supabase.from("services").select("*").eq("active", true).order("name"),
       supabase.from("technicians").select("*").eq("active", true).order("full_name"),
-      supabase
-        .from("branch_service_prices")
-        .select("service_id, price_cents, sharing_rate, effective_from")
-        .eq("branch_id", formBranchId)
-        .lte("effective_from", new Date().toLocaleDateString("sv-SE"))
-        .order("effective_from", { ascending: false }),
+      formBranchId
+        ? supabase
+            .from("branch_service_prices")
+            .select("service_id, price_cents, sharing_rate, effective_from")
+            .eq("branch_id", formBranchId)
+            .lte("effective_from", new Date().toLocaleDateString("sv-SE"))
+            .order("effective_from", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
     ]);
     return {
       types: unwrap(types) as ServiceType[],
       services: unwrap(services) as Service[],
       technicians: unwrap(technicians) as Technician[],
-      prices: unwrap(prices) as PriceRow[],
+      prices: unwrap(prices as { data: PriceRow[] | null; error: { message: string } | null }) as PriceRow[],
     };
   }, [formBranchId]);
 
