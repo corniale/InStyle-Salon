@@ -2,8 +2,9 @@
 
 // Retention analytics (spec §2): first→second visit conversion, rebooking
 // interval by service, the at-risk client list, and the 12-month trend with
-// gaps for months that have no data (edge case 24 — May is genuinely missing
-// from the source workbooks and must look missing).
+// gaps for months that have no data (edge case 24). The imported history
+// answered the spec's open question 4: May's sales were fully recorded —
+// it was the client names that went missing that month.
 
 import { useState } from "react";
 import Link from "next/link";
