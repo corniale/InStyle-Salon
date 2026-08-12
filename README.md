@@ -86,7 +86,9 @@ These are working defaults, all reversible, flagged for client confirmation:
    deliberate.
 4. **Missing May** — imported as missing; charts render a gap and never
    interpolate across it.
-5–8. Open with the client; nothing in the build blocks any answer.
+5. **Gift certificates** — rarely sold; recorded as a comp/discount line by
+   agreement. No dedicated GC concept in Stage 1.
+6–8. Open with the client; nothing in the build blocks any answer.
 
 ## Stage 1 scope notes
 
