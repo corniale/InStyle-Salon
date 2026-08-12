@@ -2,6 +2,14 @@
 
 import { Button } from "@/components/ui";
 
+export const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+export function formatBirthday(month: number | null, day: number | null): string | null {
+  if (month == null || day == null) return null;
+  return `${MONTH_SHORT[month - 1]} ${day}`;
+}
+
 export const CLIENTS_PAGE_SIZE = 50;
 
 export function StatusBadge({ status }: { status?: string }) {

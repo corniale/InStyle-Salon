@@ -13,7 +13,7 @@ import { formatCentavos } from "@/lib/money";
 import {
   Button, Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate,
 } from "@/components/ui";
-import { Pagination, StatusBadge, CLIENTS_PAGE_SIZE as PAGE } from "@/components/client-bits";
+import { Pagination, StatusBadge, formatBirthday, CLIENTS_PAGE_SIZE as PAGE } from "@/components/client-bits";
 
 interface ClientRow {
   id: string;
@@ -80,6 +80,8 @@ export default function ClientsPage() {
           aria-label="Search clients"
         />
       </div>
+
+      <BirthdaysCard />
 
       <Card>
         {q.status === "loading" && <SkeletonRows rows={10} cols={5} />}
@@ -148,5 +150,76 @@ export default function ClientsPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Birthdays in the next 30 days — the reason the birthday field exists:
+// front desk greets, offers the birthday discount, or makes the call.
+// ---------------------------------------------------------------------------
+
+interface BirthdayRow {
+  client_id: string;
+  full_name: string | null;
+  phone: string;
+  phone_declined: boolean;
+  birth_month: number;
+  birth_day: number;
+  days_until: number;
+  visit_count: number;
+  last_visit: string | null;
+  lifetime_spend_cents: number;
+}
+
+function BirthdaysCard() {
+  const q = useQuery(async () => {
+    const res = await createClient().rpc("f_upcoming_birthdays", { p_days: 30 });
+    return unwrap(res) as BirthdayRow[];
+  }, []);
+
+  if (q.status !== "ready" || q.data.length === 0) return null;
+
+  return (
+    <Card title="Birthdays in the next 30 days">
+      <Table>
+        <thead>
+          <tr>
+            <Th>Client</Th>
+            <Th>Birthday</Th>
+            <Th align="right">In</Th>
+            <Th>Phone</Th>
+            <Th align="right">Visits</Th>
+            <Th align="right">Lifetime spend</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {q.data.map((r) => (
+            <tr key={r.client_id}>
+              <Td>
+                <Link href={`/clients/detail?id=${r.client_id}`} className="font-bold hover:underline">
+                  <Truncate text={r.full_name ?? r.phone} />
+                </Link>
+              </Td>
+              <Td className="tnum">{formatBirthday(r.birth_month, r.birth_day)}</Td>
+              <Td align="right" className="tnum">
+                {r.days_until === 0 ? (
+                  <span className="font-bold text-brand-red">today</span>
+                ) : (
+                  `${r.days_until}d`
+                )}
+              </Td>
+              <Td className="tnum">{r.phone_declined ? "—" : r.phone}</Td>
+              <Td align="right" className="tnum">{r.visit_count}</Td>
+              <Td align="right" className="tnum">{formatCentavos(r.lifetime_spend_cents)}</Td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+      <p className="mt-2 text-[11px] text-text-muted">
+        Birthday discounts are recorded with the &ldquo;Birthday&rdquo; discount type on the ticket,
+        so their cost shows up in the discount analytics.
+      </p>
+    </Card>
   );
 }

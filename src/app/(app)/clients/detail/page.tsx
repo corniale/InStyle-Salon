@@ -14,10 +14,10 @@ import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos } from "@/lib/money";
 import type { Client, Package } from "@/lib/types";
 import {
-  Button, Card, EmptyState, ErrorState, Field, Input, Modal, SkeletonRows,
-  Table, Td, Th, Truncate,
+  Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
+  SkeletonRows, Table, Td, Th, Truncate,
 } from "@/components/ui";
-import { StatusBadge } from "@/components/client-bits";
+import { StatusBadge, MONTH_SHORT, formatBirthday } from "@/components/client-bits";
 
 interface VisitRow {
   visit_date: string;
@@ -134,7 +134,12 @@ function ClientDetail() {
             {client.town && ` · ${client.town}`}
             {client.barangay && `, ${client.barangay}`}
             {client.first_visit_on && ` · first visit ${client.first_visit_on}`}
+            {formatBirthday(client.birth_month, client.birth_day) &&
+              ` · birthday ${formatBirthday(client.birth_month, client.birth_day)}`}
           </p>
+          {client.birth_month == null && (
+            <BirthdaySetter clientId={client.id} onSet={q.retry} />
+          )}
         </div>
         {isManagerUp && (
           <Button onClick={() => setMergeOpen(true)}>Merge into another client</Button>
@@ -313,6 +318,70 @@ function HabitsCard({ lines }: { lines: LineRow[] }) {
         </p>
       )}
     </Card>
+  );
+}
+
+// Any staff member may fill in a missing birthday (heard at the register);
+// changing a recorded one is manager-only, enforced server-side.
+function BirthdaySetter({ clientId, onSet }: { clientId: string; onSet: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [month, setMonth] = useState("");
+  const [day, setDay] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <button
+        className="mt-1 text-[11px] text-text-muted underline underline-offset-2 hover:text-text-body"
+        onClick={() => setOpen(true)}
+      >
+        Add birthday
+      </button>
+    );
+  }
+
+  async function save() {
+    const m = Number(month), d = Number(day);
+    if (!m || !d || d < 1 || d > 31) {
+      setError("Pick the month and enter the day.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient().rpc("set_client_birthday", {
+      p_client: clientId, p_month: m, p_day: d,
+    });
+    setBusy(false);
+    if (error) {
+      setError("That did not save. Check the day is valid for the month.");
+      return;
+    }
+    setOpen(false);
+    onSet();
+  }
+
+  return (
+    <span className="mt-2 flex items-end gap-2">
+      <Field label="Birthday" error={error ?? undefined}>
+        <span className="flex gap-2">
+          <Select value={month} className="w-28" aria-label="Birth month"
+            onChange={(e) => setMonth(e.target.value)}>
+            <option value="">Month</option>
+            {MONTH_SHORT.map((m, i) => (
+              <option key={m} value={i + 1}>{m}</option>
+            ))}
+          </Select>
+          <Input inputMode="numeric" placeholder="Day" value={day} className="w-20"
+            aria-label="Birth day"
+            onChange={(e) => setDay(e.target.value.replace(/\D/g, "").slice(0, 2))} />
+        </span>
+      </Field>
+      <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void save()}>
+        Save
+      </Button>
+      <Button onClick={() => setOpen(false)}>Cancel</Button>
+    </span>
   );
 }
 

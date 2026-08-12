@@ -26,6 +26,7 @@ import {
   Button, Card, ErrorState, Field, Input, Select, SkeletonRows,
 } from "@/components/ui";
 import { enqueueTicket } from "@/lib/offline/queue";
+import { MONTH_SHORT } from "@/components/client-bits";
 
 interface PriceRow { service_id: string; price_cents: number; sharing_rate: number | null; effective_from: string }
 
@@ -114,6 +115,8 @@ export default function NewTicketPage() {
   const [town, setTown] = useState("");
   const [barangay, setBarangay] = useState("");
   const [inquirySource, setInquirySource] = useState("");
+  const [birthMonth, setBirthMonth] = useState("");
+  const [birthDay, setBirthDay] = useState("");
   const [matched, setMatched] = useState<Client | null>(null);
   const [clientPackages, setClientPackages] = useState<(Package & { services: { name: string } })[]>([]);
 
@@ -289,7 +292,18 @@ export default function NewTicketPage() {
     const clientLabel = clientName.trim() || (phoneDeclined ? "Walk-in" : phone);
 
     try {
-      const { error } = await createClient().rpc("create_ticket", { p_payload: payload });
+      const supabase = createClient();
+      const { error } = await supabase.rpc("create_ticket", { p_payload: payload });
+
+      if (!error && matched && matched.birth_month == null && birthMonth !== "" && birthDay !== "") {
+        // Heard at the register: fill in a missing birthday on the existing
+        // record. Failure here must not fail the sale.
+        await supabase.rpc("set_client_birthday", {
+          p_client: matched.id,
+          p_month: Number(birthMonth),
+          p_day: Number(birthDay),
+        });
+      }
 
       if (error) {
         // Network-ish failures queue; validation failures surface (spec §9).
@@ -411,6 +425,17 @@ export default function NewTicketPage() {
                   {" "}· {clientPackages.length} active package{clientPackages.length > 1 ? "s" : ""}
                 </span>
               )}
+              {matched.birth_month != null && matched.birth_day != null && (() => {
+                const today = new Date();
+                const bday = new Date(today.getFullYear(), matched.birth_month! - 1, matched.birth_day!);
+                if (bday < today) bday.setFullYear(today.getFullYear() + 1);
+                const days = Math.round((bday.getTime() - today.getTime()) / 86400000);
+                return days <= 7 ? (
+                  <span className="ml-2 rounded-[4px] bg-brand-red-tint px-2 py-px text-[11px] font-bold text-brand-red-deep">
+                    Birthday {days === 0 ? "today" : `in ${days} day${days > 1 ? "s" : ""}`} — offer the birthday discount
+                  </span>
+                ) : null;
+              })()}
             </div>
           )}
 
@@ -430,6 +455,22 @@ export default function NewTicketPage() {
             <Input value={barangay} disabled={!!matched}
               onChange={(e) => { markDirty(); setBarangay(e.target.value); }} />
           </Field>
+          {(!matched || matched.birth_month == null) && (
+            <Field label="Birthday (optional)" hint="Month and day only — enough for the greeting and the discount">
+              <div className="flex gap-2">
+                <Select value={birthMonth} className="w-28" aria-label="Birth month"
+                  onChange={(e) => { markDirty(); setBirthMonth(e.target.value); }}>
+                  <option value="">Month</option>
+                  {MONTH_SHORT.map((m, i) => (
+                    <option key={m} value={i + 1}>{m}</option>
+                  ))}
+                </Select>
+                <Input inputMode="numeric" placeholder="Day" value={birthDay}
+                  className="w-20" aria-label="Birth day"
+                  onChange={(e) => { markDirty(); setBirthDay(e.target.value.replace(/\D/g, "").slice(0, 2)); }} />
+              </div>
+            </Field>
+          )}
           {!matched && (
             <Field label="How did they hear about us">
               <Select value={inquirySource}
@@ -547,6 +588,7 @@ export default function NewTicketPage() {
                       }
                     >
                       <option value="">None</option>
+                      <option value="birthday">Birthday</option>
                       <option value="senior">Senior</option>
                       <option value="pwd">PWD</option>
                       <option value="staff">Staff</option>

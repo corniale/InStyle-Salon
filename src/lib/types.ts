@@ -77,6 +77,8 @@ export interface Client {
   inquiry_source: string | null;
   referred_by_client_id: string | null;
   first_visit_on: string | null;
+  birth_month: number | null;
+  birth_day: number | null;
   notes: string | null;
   merged_into_id: string | null;
 }
@@ -100,7 +102,7 @@ export interface Ticket {
   created_at: string;
 }
 
-export type DiscountType = "senior" | "pwd" | "staff" | "promo" | "negotiated" | "package";
+export type DiscountType = "senior" | "pwd" | "staff" | "promo" | "negotiated" | "package" | "birthday";
 
 export interface TicketLine {
   id: string;
@@ -166,6 +168,8 @@ export interface TicketPayload {
     town?: string;
     inquiry_source?: string;
     referred_by_client_id?: string;
+    birth_month?: number;
+    birth_day?: number;
   };
   started_at?: string;
   ended_at?: string;
