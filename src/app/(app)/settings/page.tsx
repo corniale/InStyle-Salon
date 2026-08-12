@@ -595,9 +595,9 @@ function UsersTab({ branches }: { branches: Branch[] }) {
   return (
     <Card title="Staff accounts">
       <p className="mb-4 text-[11px] text-text-muted">
-        Accounts are invited from the Supabase dashboard (Auth → Invite user) with role and branch
-        in the invitation metadata; they appear here once created. Deactivating an account locks it
-        out immediately — front desk and managers act only within their branch.
+        Create the login in the Supabase dashboard (Authentication → Users → Add user), then set
+        the role and branch here — new accounts start as front desk. Deactivating an account locks
+        it out immediately; front desk and managers act only within their branch.
       </p>
       {q.status === "loading" && <SkeletonRows rows={4} cols={4} />}
       {q.status === "error" && <ErrorState message="Accounts did not load." onRetry={q.retry} />}
@@ -619,9 +619,11 @@ function UsersTab({ branches }: { branches: Branch[] }) {
                   <RoleSelect profile={p} branches={branches} onChanged={q.retry} />
                 </Td>
                 <Td>
-                  {p.branch_id == null
-                    ? "All branches"
-                    : branches.find((b) => b.id === p.branch_id)?.name ?? "—"}
+                  {p.role === "owner" ? (
+                    "All branches"
+                  ) : (
+                    <BranchSelect profile={p} branches={branches} onChanged={q.retry} />
+                  )}
                 </Td>
                 <Td>
                   <ProfileToggle profile={p} onChanged={q.retry} />
@@ -664,6 +666,36 @@ function RoleSelect({ profile, branches, onChanged }: {
       <option value="owner">Owner</option>
       <option value="manager">Branch manager</option>
       <option value="front_desk">Front desk</option>
+    </Select>
+  );
+}
+
+function BranchSelect({ profile, branches, onChanged }: {
+  profile: ProfileRow;
+  branches: Branch[];
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Select
+      value={profile.branch_id ?? ""}
+      disabled={busy}
+      className="w-36"
+      aria-label={`Branch for ${profile.full_name}`}
+      onChange={async (e) => {
+        setBusy(true);
+        await createClient()
+          .from("profiles")
+          .update({ branch_id: e.target.value })
+          .eq("id", profile.id);
+        setBusy(false);
+        onChanged();
+      }}
+    >
+      {profile.branch_id == null && <option value="">—</option>}
+      {branches.map((b) => (
+        <option key={b.id} value={b.id}>{b.name}</option>
+      ))}
     </Select>
   );
 }
