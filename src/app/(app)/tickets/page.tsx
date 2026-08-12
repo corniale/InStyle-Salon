@@ -52,7 +52,7 @@ export default function TicketsPage() {
     let query = supabase
       .from("tickets")
       .select(
-        "id, series_no, ticket_date, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians(full_name))",
+        "id, series_no, ticket_date, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))",
       )
       .eq("ticket_date", date)
       .order("created_at", { ascending: false })
