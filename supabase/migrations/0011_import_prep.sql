@@ -1,3 +1,8 @@
+-- Defensive re-issue of migration 0011 (import preparation).
+-- Safe to run from ANY state: never applied, partially applied, or fully
+-- applied — every structural change is guarded, every view and function is
+-- rebuilt. Run this BEFORE the four import files.
+
 -- Preparation for the January-July history import, driven by what the real
 -- workbooks contain (which differs from the spec's assumptions):
 --
@@ -26,8 +31,8 @@ drop view if exists v_client_retention;
 drop view if exists v_client_visits;
 drop view if exists v_ticket_lines_active;
 
-alter table ticket_lines drop column company_share_cents;
-alter table ticket_lines drop column technician_share_cents;
+alter table ticket_lines drop column if exists company_share_cents;
+alter table ticket_lines drop column if exists technician_share_cents;
 
 alter table ticket_lines alter column sharing_rate type numeric(8,6);
 
@@ -203,14 +208,14 @@ left join repeats r
 -- Pooled walk-in clients
 -- ---------------------------------------------------------------------------
 
-alter table clients add column is_pool boolean not null default false;
+alter table clients add column if not exists is_pool boolean not null default false;
 
 comment on column clients.is_pool is
   'A per-branch bucket for historical anonymous walk-in rows. Money counts; retention must not.';
 
 -- The views/functions that reason about *people* exclude pools.
 
-create or replace view v_client_retention
+create view v_client_retention
 with (security_invoker = on) as
 with gaps as (
   select client_id,
