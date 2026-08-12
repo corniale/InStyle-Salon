@@ -12,6 +12,7 @@ import {
   Settings, Scale, LogOut,
 } from "lucide-react";
 import { useSession } from "@/components/session-context";
+import { Wordmark } from "@/components/wordmark";
 import { usePendingSyncCount } from "@/lib/offline/use-pending-sync";
 import { createClient } from "@/lib/supabase/client";
 
@@ -47,12 +48,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-52 shrink-0 flex-col border-r border-border bg-surface-card">
-        <div className="flex items-center gap-2 px-4 py-4">
-          {/* Wordmark: black with the brand-red accent, logo only. */}
-          <span className="text-[15px] font-bold tracking-tight">
-            in<span className="text-brand-red">Style</span>
-          </span>
-          <span className="text-[11px] text-text-muted">salon</span>
+        <div className="flex items-center px-4 py-4">
+          <Wordmark business={business} />
         </div>
 
         <nav className="flex-1 space-y-1 px-2">

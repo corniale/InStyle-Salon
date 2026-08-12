@@ -29,7 +29,7 @@ export default function SettingsPage() {
 
 function SettingsBody() {
   const { branches } = useSession();
-  const [tab, setTab] = useState<"services" | "technicians" | "targets" | "users">("services");
+  const [tab, setTab] = useState<"services" | "technicians" | "targets" | "users" | "businesses">("services");
 
   return (
     <div className="space-y-6">
@@ -41,6 +41,7 @@ function SettingsBody() {
           ["technicians", "Technicians"],
           ["targets", "Targets"],
           ["users", "Staff accounts"],
+          ["businesses", "Businesses"],
         ] as const).map(([key, label]) => (
           <button
             key={key}
@@ -58,6 +59,7 @@ function SettingsBody() {
       {tab === "technicians" && <TechniciansTab branches={branches} />}
       {tab === "targets" && <TargetsTab branches={branches} />}
       {tab === "users" && <UsersTab branches={branches} />}
+      {tab === "businesses" && <BusinessesTab />}
     </div>
   );
 }
@@ -167,6 +169,11 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
         </tbody>
       </Table>
 
+      <div className="mt-4 flex flex-wrap gap-4 border-t border-border pt-4">
+        <AddServiceInline types={types} onChanged={q.retry} />
+        <AddServiceTypeInline businessId={businessId} onChanged={q.retry} />
+      </div>
+
       <PriceModal
         editing={editing}
         onClose={() => setEditing(null)}
@@ -178,6 +185,117 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
         onDone={() => { setRateEditing(null); q.retry(); }}
       />
     </Card>
+  );
+}
+
+function AddServiceInline({ types, onChanged }: { types: ServiceType[]; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [typeId, setTypeId] = useState("");
+  const [ratePct, setRatePct] = useState("60");
+  const [duration, setDuration] = useState("60");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    const rate = Number(ratePct);
+    const mins = Number(duration);
+    if (name.trim() === "") { setError("The service needs a name."); return; }
+    if (!typeId) { setError("Pick a service type."); return; }
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      setError("Company share must be 0 to 100."); return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient().from("services").insert({
+      name: name.trim(),
+      service_type_id: typeId,
+      default_sharing_rate: (rate / 100).toFixed(3),
+      default_duration_min: Number.isFinite(mins) && mins > 0 ? mins : 60,
+    });
+    setBusy(false);
+    if (error) {
+      setError(/unique/i.test(error.message)
+        ? "That service already exists under this type."
+        : "The service was not added. Try again.");
+      return;
+    }
+    setName("");
+    setOpen(false);
+    onChanged();
+  }
+
+  if (!open) return <Button onClick={() => setOpen(true)}>Add service</Button>;
+  return (
+    <span className="flex flex-wrap items-end gap-2">
+      <Field label="Service name" error={error ?? undefined}>
+        <Input value={name} className="w-48" invalid={!!error}
+          onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label="Type">
+        <Select value={typeId} className="w-36" onChange={(e) => setTypeId(e.target.value)}>
+          <option value="">—</option>
+          {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </Select>
+      </Field>
+      <Field label="Company share (%)">
+        <Input inputMode="numeric" value={ratePct} className="w-24"
+          onChange={(e) => setRatePct(e.target.value)} />
+      </Field>
+      <Field label="Duration (min)">
+        <Input inputMode="numeric" value={duration} className="w-24"
+          onChange={(e) => setDuration(e.target.value)} />
+      </Field>
+      <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>Add</Button>
+      <Button onClick={() => setOpen(false)}>Cancel</Button>
+      <span className="mb-2 w-full text-[11px] text-text-muted">
+        New services start with no price — set each branch&apos;s price in the table above, or they
+        show as &ldquo;not offered&rdquo;.
+      </span>
+    </span>
+  );
+}
+
+function AddServiceTypeInline({ businessId, onChanged }: {
+  businessId: string | null;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (name.trim() === "") { setError("The type needs a name."); return; }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient().from("service_types").insert({
+      name: name.trim(),
+      business_id: businessId,
+      sort_order: 99,
+    });
+    setBusy(false);
+    if (error) {
+      setError(/unique/i.test(error.message)
+        ? "That type already exists for this business."
+        : "The type was not added. Try again.");
+      return;
+    }
+    setName("");
+    setOpen(false);
+    onChanged();
+  }
+
+  if (!open) return <Button onClick={() => setOpen(true)}>Add service type</Button>;
+  return (
+    <span className="flex items-end gap-2">
+      <Field label="Type name" error={error ?? undefined}>
+        <Input value={name} className="w-40" invalid={!!error}
+          onChange={(e) => setName(e.target.value)} placeholder="e.g. Massage" />
+      </Field>
+      <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>Add</Button>
+      <Button onClick={() => setOpen(false)}>Cancel</Button>
+    </span>
   );
 }
 
@@ -565,5 +683,292 @@ function ProfileToggle({ profile, onChanged }: { profile: ProfileRow; onChanged:
     >
       {profile.active ? "Active — deactivate" : "Deactivated — restore"}
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Businesses — branding and onboarding. The brand colour touches only the
+// wordmark and brand badges; errors stay red for every business.
+// ---------------------------------------------------------------------------
+
+interface BusinessRow {
+  id: string;
+  name: string;
+  code: string;
+  sort_order: number;
+  active: boolean;
+  brand_color: string;
+  wordmark: string | null;
+  wordmark_accent: string | null;
+  tagline: string | null;
+  logo_path: string | null;
+}
+
+interface BranchRow2 {
+  id: string;
+  business_id: string;
+  name: string;
+  code: string;
+  accent: string;
+  active: boolean;
+}
+
+function BusinessesTab() {
+  const q = useQuery(async () => {
+    const supabase = createClient();
+    const [businesses, branches] = await Promise.all([
+      supabase.from("businesses").select("*").order("sort_order"),
+      supabase.from("branches").select("id, business_id, name, code, accent, active").order("code"),
+    ]);
+    return {
+      businesses: unwrap(businesses) as BusinessRow[],
+      branches: unwrap(branches) as BranchRow2[],
+    };
+  }, []);
+
+  if (q.status === "loading") return <Card><SkeletonRows rows={4} cols={4} /></Card>;
+  if (q.status === "error") return <ErrorState message="Businesses did not load." onRetry={q.retry} />;
+
+  return (
+    <div className="space-y-6">
+      <p className="text-[11px] text-text-muted">
+        Branding swaps the wordmark and its accent colour when switching businesses. Buttons,
+        status colours and alerts stay the same everywhere — red always means something is wrong,
+        never a brand. After changing branding, reload to see it in the sidebar.
+      </p>
+      {q.data.businesses.map((b) => (
+        <BusinessCard
+          key={b.id}
+          business={b}
+          branches={q.data.branches.filter((br) => br.business_id === b.id)}
+          onChanged={q.retry}
+        />
+      ))}
+      <AddBusinessCard onChanged={q.retry} />
+    </div>
+  );
+}
+
+function BusinessCard({ business, branches, onChanged }: {
+  business: BusinessRow;
+  branches: BranchRow2[];
+  onChanged: () => void;
+}) {
+  const [name, setName] = useState(business.name);
+  const [wordmark, setWordmark] = useState(business.wordmark ?? "");
+  const [accent, setAccent] = useState(business.wordmark_accent ?? "");
+  const [tagline, setTagline] = useState(business.tagline ?? "");
+  const [color, setColor] = useState(business.brand_color);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const previewWordmark = wordmark || name;
+  const at = accent ? previewWordmark.indexOf(accent) : -1;
+
+  async function save() {
+    if (name.trim() === "") {
+      setError("The business needs a name.");
+      return;
+    }
+    if (accent && !previewWordmark.includes(accent)) {
+      setError("The accented part must appear inside the wordmark.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient()
+      .from("businesses")
+      .update({
+        name: name.trim(),
+        wordmark: wordmark.trim() || null,
+        wordmark_accent: accent.trim() || null,
+        tagline: tagline.trim() || null,
+        brand_color: color,
+      })
+      .eq("id", business.id);
+    setBusy(false);
+    if (error) {
+      setError("Branding was not saved. Check the colour is a full hex value.");
+      return;
+    }
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+    onChanged();
+  }
+
+  return (
+    <Card title={business.name}>
+      <div className="mb-4 rounded-[4px] border border-border bg-surface-page p-4">
+        <span className="flex items-baseline gap-2">
+          <span className="text-[15px] font-bold tracking-tight">
+            {at === -1 ? previewWordmark : (
+              <>
+                {previewWordmark.slice(0, at)}
+                <span style={{ color }}>{accent}</span>
+                {previewWordmark.slice(at + accent.length)}
+              </>
+            )}
+          </span>
+          {tagline && <span className="text-[11px] text-text-muted">{tagline}</span>}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Field label="Name" error={error ?? undefined}>
+          <Input value={name} invalid={!!error} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Wordmark" hint="Shown in the sidebar; defaults to the name">
+          <Input value={wordmark} onChange={(e) => setWordmark(e.target.value)} />
+        </Field>
+        <Field label="Accented part" hint="The substring drawn in the brand colour">
+          <Input value={accent} onChange={(e) => setAccent(e.target.value)} />
+        </Field>
+        <Field label="Tagline">
+          <Input value={tagline} onChange={(e) => setTagline(e.target.value)} />
+        </Field>
+        <Field label="Brand colour">
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              className="h-8 w-12 cursor-pointer rounded-[4px] border border-border bg-surface-card"
+              aria-label="Brand colour"
+            />
+            <Input value={color} onChange={(e) => setColor(e.target.value)} className="w-28 tnum" />
+          </div>
+        </Field>
+        <div className="flex items-end gap-2 pb-px">
+          <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void save()}>
+            Save branding
+          </Button>
+          {saved && <span className="mb-2 text-[11px] text-data-teal">Saved</span>}
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-border pt-4">
+        <p className="mb-2 text-[11px] text-text-muted">Branches</p>
+        <div className="flex flex-wrap items-center gap-2">
+          {branches.map((br) => (
+            <span key={br.id} className="rounded-[4px] border border-border px-2 py-1 text-[11px]">
+              {br.name} · {br.code}
+            </span>
+          ))}
+          <AddBranchInline businessId={business.id} onChanged={onChanged} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function AddBranchInline({ businessId, onChanged }: { businessId: string; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [accent, setAccent] = useState<"slate" | "plum">("slate");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (name.trim() === "" || code.trim() === "") {
+      setError("A branch needs a name and a short code.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient().from("branches").insert({
+      business_id: businessId,
+      name: name.trim(),
+      code: code.trim().toUpperCase(),
+      accent,
+    });
+    setBusy(false);
+    if (error) {
+      setError(/unique/i.test(error.message)
+        ? "That branch code is already taken."
+        : "The branch was not added. Try again.");
+      return;
+    }
+    setName(""); setCode(""); setOpen(false);
+    onChanged();
+  }
+
+  if (!open) {
+    return <Button onClick={() => setOpen(true)}>Add branch</Button>;
+  }
+  return (
+    <span className="flex flex-wrap items-end gap-2">
+      <Field label="Branch name" error={error ?? undefined}>
+        <Input value={name} className="w-36" invalid={!!error}
+          onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label="Code">
+        <Input value={code} className="w-28"
+          onChange={(e) => setCode(e.target.value)} placeholder="e.g. SPA-MAIN" />
+      </Field>
+      <Field label="Accent">
+        <Select value={accent} className="w-28"
+          onChange={(e) => setAccent(e.target.value as "slate" | "plum")}>
+          <option value="slate">Slate</option>
+          <option value="plum">Plum</option>
+        </Select>
+      </Field>
+      <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>Add</Button>
+      <Button onClick={() => setOpen(false)}>Cancel</Button>
+    </span>
+  );
+}
+
+function AddBusinessCard({ onChanged }: { onChanged: () => void }) {
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (name.trim() === "" || code.trim() === "") {
+      setError("A business needs a name and a short code.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient().from("businesses").insert({
+      name: name.trim(),
+      code: code.trim().toUpperCase(),
+      sort_order: 99,
+    });
+    setBusy(false);
+    if (error) {
+      setError(/unique/i.test(error.message)
+        ? "That business code is already taken."
+        : "The business was not added. Try again.");
+      return;
+    }
+    setName(""); setCode("");
+    onChanged();
+  }
+
+  return (
+    <Card title="Add business">
+      <p className="mb-4 text-[11px] text-text-muted">
+        Onboarding order: add the business, add its branches here, then its service types and
+        services under Services and prices, then its technicians. Clients are shared across all
+        businesses automatically.
+      </p>
+      <div className="flex flex-wrap items-end gap-4">
+        <Field label="Name" error={error ?? undefined}>
+          <Input value={name} className="w-64" invalid={!!error}
+            onChange={(e) => setName(e.target.value)} placeholder="e.g. inStyle Barbershop" />
+        </Field>
+        <Field label="Code">
+          <Input value={code} className="w-36"
+            onChange={(e) => setCode(e.target.value)} placeholder="e.g. BARBER" />
+        </Field>
+        <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>
+          Add business
+        </Button>
+      </div>
+    </Card>
   );
 }

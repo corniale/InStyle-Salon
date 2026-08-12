@@ -16,6 +16,12 @@ export interface Business {
   code: string;
   sort_order: number;
   active: boolean;
+  /** Identity accent only — never an action or status colour. */
+  brand_color: string;
+  wordmark: string | null;
+  wordmark_accent: string | null;
+  tagline: string | null;
+  logo_path: string | null;
 }
 
 export interface Branch {
