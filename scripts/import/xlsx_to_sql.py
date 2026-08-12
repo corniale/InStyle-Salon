@@ -98,7 +98,7 @@ def read_file(path, branch):
         "town": col("TOWN & PROVINCE"), "oldnew": col("OLD OR NEW"),
         "source": col("INQUIRY SOURCE"), "referred": col("REFERRED BY"),
         "service": col("SERVICE"), "type": col("TYPE OF SERVICE"),
-        "amount": col("AMOUNT"), "no": col("NO."), "total": col("TOTAL AMOUNT"),
+        "amount": col("AMOUNT"), "no": col("NO.", "QTY"), "total": col("TOTAL AMOUNT"),
         "sharing": col("SHARING"), "company": col("COMPANY SHARE"),
         "tech": col("TECHNICIAN"),
         "assist": col("ASSIST", "ASSIST (BANLAW)", "MINUS ASSIST", optional=True),
@@ -110,11 +110,38 @@ def read_file(path, branch):
         "disc_amount": col("DISCOUNT AMOUNT", optional=True),
         "online_method": col("ONLINE PAYMENT", optional=True),
         "online_amount": col("ONLINE PYMNT AMOUNT", "ONLINE PAYMENT AMOUNT", optional=True),
+        # July 2026 onward: phones and service times arrive in the source.
+        "phone": col("PHONE NUMBER", optional=True),
+        "tstart": col("TIME STARTED (24-HR FORMAT)", "TIME STARTED", optional=True),
+        "tend": col("TIME ENDED (24-HR FORMAT)", "TIME ENDED", optional=True),
     }
 
     def opt(r, key):
         i = ix[key]
         return r[i] if i is not None else None
+
+    def phone_norm(v):
+        """Excel drops leading zeros on numeric phones; recover 09XXXXXXXXX."""
+        if v is None:
+            return None
+        digits = re.sub(r"\D", "", re.sub(r"\.0$", "", str(v).strip()))
+        if len(digits) == 10 and digits.startswith("9"):
+            digits = "0" + digits
+        if len(digits) == 12 and digits.startswith("639"):
+            digits = "0" + digits[2:]
+        return digits if len(digits) == 11 and digits.startswith("09") else None
+
+    def time_norm(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v.strftime("%H:%M")
+        if hasattr(v, "hour") and hasattr(v, "minute"):
+            return f"{v.hour:02d}:{v.minute:02d}"
+        m = re.match(r"^(\d{1,2}):(\d{2})", str(v).strip())
+        if m and 0 <= int(m.group(1)) <= 23:
+            return f"{int(m.group(1)):02d}:{m.group(2)}"
+        return None
 
     rows, skipped = [], []
     last_date = None
@@ -156,7 +183,8 @@ def read_file(path, branch):
             "name": str(r[ix["name"]]).strip() if r[ix["name"]] else None,
             "brgy": str(r[ix["brgy"]]).strip() if r[ix["brgy"]] else None,
             "town": str(r[ix["town"]]).strip() if r[ix["town"]] else None,
-            "oldnew": str(r[ix["oldnew"]]).strip().upper() if r[ix["oldnew"]] else None,
+            "oldnew": (lambda v: v if v in ("OLD", "NEW") else None)(
+                str(r[ix["oldnew"]]).strip().upper() if r[ix["oldnew"]] else None),
             "source": str(r[ix["source"]]).strip() if r[ix["source"]] else None,
             "referred": str(r[ix["referred"]]).strip() if r[ix["referred"]] else None,
             "service": norm_name(service),
@@ -179,6 +207,10 @@ def read_file(path, branch):
             "online_method": str(opt(r, "online_method")).strip().upper() if opt(r, "online_method") else None,
             "online_amount_cents": int(round(float(opt(r, "online_amount")) * 100))
                 if isinstance(opt(r, "online_amount"), (int, float)) else None,
+            "phone": phone_norm(opt(r, "phone")),
+            "phone_raw": str(opt(r, "phone")).strip() if opt(r, "phone") else None,
+            "tstart": time_norm(opt(r, "tstart")),
+            "tend": time_norm(opt(r, "tend")),
         })
     return rows, skipped, read_target(wb)
 
@@ -379,7 +411,7 @@ create temp table _imp (
   cname text, brgy text, town text, oldnew text, isource text, referred text,
   service text, stype text, qty int, unit_cents bigint, discount_cents bigint,
   discount_type text, rate6 numeric(8,6), tech text, assist_name text,
-  rating int, net_cents bigint, series text
+  rating int, net_cents bigint, series text, phone text, tstart text, tend text
 ) on commit drop;
 """)
 
@@ -394,7 +426,7 @@ create temp table _imp (
                 f"{r['qty']},{r['unit_cents']},{r['discount_cents']},{q(r['discount_type'])},"
                 f"{r['rate6']},{q(r['tech'])},{q(r['assisted_by'])},"
                 f"{r['rating'] if r['rating'] else 'null'},"
-                f"{r['net_cents']},{q(r['series'])})")
+                f"{r['net_cents']},{q(r['series'])},{q(r['phone'])},{q(r['tstart'])},{q(r['tend'])})")
         w("insert into _imp values\n" + ",\n".join(vals) + ";")
 
     pay_vals = []
@@ -482,7 +514,23 @@ where b.business_id = (select biz from _ctx)
   and b.code in (select distinct branch from _imp)
 on conflict (phone) do nothing;
 
--- Named clients: identity is the normalised name (history has no phones).
+-- Clients with a real phone number (July 2026 onward): phone is the
+-- identity, exactly as the product's own rule says.
+insert into clients (phone, phone_declined, full_name, barangay, town, inquiry_source,
+                     first_visit_on, notes)
+select distinct on (v.phone)
+  v.phone, false, v.cname, v.brgy, v.town, v.isource, v.first_date,
+  case when v.referred is not null then 'Referred by ' || v.referred else null end
+from (
+  select phone, cname, brgy, town, isource, referred,
+         min(tdate) over (partition by phone) as first_date,
+         seq
+  from _imp where phone is not null
+) v
+order by v.phone, (v.cname is null), seq
+on conflict (phone) do nothing;
+
+-- Named clients without a phone: identity is the normalised name.
 insert into clients (phone, phone_declined, full_name, barangay, town, inquiry_source,
                      first_visit_on, notes)
 select
@@ -512,30 +560,49 @@ create temp table _new_tickets (id uuid, idempotency_key text) on commit drop;
 with heads0 as (
   select distinct on (ticket_key)
     ticket_key, branch, tdate, cname, series,
-    bool_or(oldnew = 'NEW') over (partition by ticket_key) as any_new
+    bool_or(oldnew = 'NEW') over (partition by ticket_key) as any_new,
+    min(phone)  over (partition by ticket_key) as phone,
+    min(tstart) over (partition by ticket_key) as tstart,
+    max(tend)   over (partition by ticket_key) as tend
   from _imp
   order by ticket_key, seq
 ),
 heads as (
-  -- A paper series number occasionally covers two clients or two dates;
-  -- those become separate tickets, so duplicates get a /n suffix.
+  -- A paper series number occasionally covers two clients or two dates, and
+  -- the counters can repeat across months, so duplicates — including tickets
+  -- already imported by earlier batches — get a /n suffix.
   select h.*,
          case
            when series is null then null
-           when row_number() over (partition by branch, series order by tdate, ticket_key) = 1
-             then series
-           else series || '/' ||
-                row_number() over (partition by branch, series order by tdate, ticket_key)
+           else series || case
+             when row_number() over (partition by branch, series order by tdate, ticket_key)
+                  + coalesce(prior.n, 0) = 1 then ''
+             else '/' || (row_number() over (partition by branch, series order by tdate, ticket_key)
+                          + coalesce(prior.n, 0))
+           end
          end as series_unique
   from heads0 h
+  left join lateral (
+    select count(*) as n
+    from tickets t
+    join branches tb on tb.id = t.branch_id
+    where tb.code = h.branch and tb.business_id = (select biz from _ctx)
+      and (t.series_no = h.series or t.series_no like h.series || '/%')
+  ) prior on h.series is not null
 ),
 ins as (
-  insert into tickets (branch_id, client_id, ticket_date, series_no, payment_method,
+  insert into tickets (branch_id, client_id, ticket_date, started_at, ended_at,
+                       series_no, payment_method,
                        is_new_client, idempotency_key, created_by)
   select
     b.id,
-    coalesce(nc.id, pc.id),
+    coalesce(ph.id, nc.id, pc.id),
     h.tdate,
+    -- Service times arrive July onward; bad orderings are dropped, not fatal.
+    case when h.tstart is not null
+         then (h.tdate::text || ' ' || h.tstart || ':00+08')::timestamptz end,
+    case when h.tstart is not null and h.tend is not null and h.tend >= h.tstart
+         then (h.tdate::text || ' ' || h.tend || ':00+08')::timestamptz end,
     h.series_unique,
     coalesce((select px.summary from _payx px where px.ticket_key = h.ticket_key limit 1), 'cash'),
     coalesce(h.any_new, false) and h.cname is not null,
@@ -543,7 +610,8 @@ ins as (
     (select owner from _ctx)
   from heads h
   join branches b on b.code = h.branch and b.business_id = (select biz from _ctx)
-  left join clients nc on h.cname is not null
+  left join clients ph on h.phone is not null and ph.phone = h.phone
+  left join clients nc on h.phone is null and h.cname is not null
                       and nc.phone = 'WALKIN-N-' || md5(upper(h.cname))
   left join clients pc on h.cname is null and pc.phone = 'WALKIN-POOL-' || h.branch
   where not exists (select 1 from tickets t where t.idempotency_key = h.ticket_key)
@@ -676,6 +744,15 @@ commit;""")
     assumed = sum(1 for r in all_rows if r.get("company_assumed"))
     if assumed:
         print(f"NOTE: {assumed} lines had no company share; assumed 50%", file=sys.stderr)
+    with_phone = sum(1 for r in all_rows if r["phone"])
+    bad_phone = [(r["phone_raw"]) for r in all_rows if r["phone_raw"] and not r["phone"]]
+    if with_phone or bad_phone:
+        print(f"\nPhones: {with_phone} rows with a valid number, {len(bad_phone)} unusable", file=sys.stderr)
+        for s in list(dict.fromkeys(bad_phone))[:8]:
+            print(f"  unusable: {s!r}", file=sys.stderr)
+    timed = sum(1 for r in all_rows if r["tstart"])
+    if timed:
+        print(f"Service times present on {timed} rows", file=sys.stderr)
     if all_skipped:
         print(f"\nSkipped {len(all_skipped)} rows:", file=sys.stderr)
         for fname, ln, why in all_skipped[:20]:
