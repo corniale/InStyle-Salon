@@ -64,6 +64,21 @@ def fit_rate(company_cents, total_cents):
     return base, False
 
 
+def read_target(wb):
+    """The month's TARGET figure from the DASHBOARD sheet (pesos), if present."""
+    try:
+        grid = [list(r) for r in wb["DASHBOARD"].iter_rows(values_only=True)]
+    except KeyError:
+        return None
+    for i, row in enumerate(grid):
+        for j, v in enumerate(row):
+            if isinstance(v, str) and v.strip().upper() == "TARGET":
+                below = grid[i + 3][j] if i + 3 < len(grid) and j < len(grid[i + 3]) else None
+                if isinstance(below, (int, float)):
+                    return int(round(below * 100))
+    return None
+
+
 def read_file(path, branch):
     wb = load_workbook(path, data_only=True, read_only=True)
     ws = wb["DAILY SALES"]
@@ -143,7 +158,7 @@ def read_file(path, branch):
             "rating": rating,
             "branch": branch,
         })
-    return rows, skipped
+    return rows, skipped, read_target(wb)
 
 
 def main():
@@ -153,14 +168,19 @@ def main():
     args = ap.parse_args()
 
     all_rows, all_skipped = [], []
+    targets = {}  # branch -> (latest month seen, target cents)
     for path in args.files:
         fname = path.rsplit("/", 1)[-1]
         m = re.search(r"(MAIN|BRANCH)_", fname)
         if not m:
             sys.exit(f"Cannot infer branch from filename: {fname}")
-        rows, skipped = read_file(path, m.group(1))
+        rows, skipped, target = read_file(path, m.group(1))
         all_rows.extend(rows)
         all_skipped.extend((fname, ln, why) for ln, why in skipped)
+        if rows and target:
+            month = max(r["date"] for r in rows).strftime("%Y-%m")
+            if m.group(1) not in targets or month > targets[m.group(1)][0]:
+                targets[m.group(1)] = (month, target)
         print(f"{fname}: {len(rows)} rows, {len(skipped)} skipped", file=sys.stderr)
 
     # Fill missing type from the same service seen elsewhere; default Others.
@@ -460,10 +480,11 @@ join service_types st on st.business_id = (select biz from _ctx)
 join services s on s.service_type_id = st.id and s.name = p.service
 on conflict (branch_id, service_id, effective_from) do nothing;
 
--- Monthly targets from the workbook dashboards
-update branches set monthly_target_cents = 49500000
-where business_id = (select biz from _ctx) and code in ('MAIN','BRANCH');
 """)
+    for branch, (month, cents) in sorted(targets.items()):
+        w(f"""-- Target from the {branch} {month} dashboard
+update branches set monthly_target_cents = {cents}
+where business_id = (select biz from _ctx) and code = {q(branch)};""")
 
     w("""
 -- ---------------------------------------------------------------------------
