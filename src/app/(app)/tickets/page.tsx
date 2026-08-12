@@ -28,7 +28,14 @@ interface TicketRow {
   voided_at: string | null;
   void_reason: string | null;
   clients: { full_name: string | null; phone: string; phone_declined: boolean } | null;
-  ticket_lines: { total_cents: number; company_share_cents: number }[];
+  ticket_lines: {
+    total_cents: number;
+    company_share_cents: number;
+    qty: number;
+    rating: number | null;
+    services: { name: string } | null;
+    technicians: { full_name: string } | null;
+  }[];
 }
 
 function todayISO(): string {
@@ -45,7 +52,7 @@ export default function TicketsPage() {
     let query = supabase
       .from("tickets")
       .select(
-        "id, series_no, ticket_date, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents)",
+        "id, series_no, ticket_date, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians(full_name))",
       )
       .eq("ticket_date", date)
       .order("created_at", { ascending: false })
@@ -104,6 +111,8 @@ export default function TicketsPage() {
               <tr>
                 <Th>Ticket</Th>
                 <Th>Client</Th>
+                <Th>Services</Th>
+                <Th>Technician</Th>
                 <Th>Payment</Th>
                 <Th align="right">Total</Th>
                 <Th align="right">Company share</Th>
@@ -139,6 +148,24 @@ export default function TicketsPage() {
                           t.clients?.full_name ??
                           (t.clients?.phone_declined ? "Walk-in" : (t.clients?.phone ?? "—"))
                         }
+                      />
+                    </Td>
+                    <Td>
+                      <Truncate
+                        text={t.ticket_lines
+                          .map((l) =>
+                            l.qty > 1
+                              ? `${l.services?.name ?? "?"} ×${l.qty}`
+                              : (l.services?.name ?? "?"),
+                          )
+                          .join(", ") || "—"}
+                        max={40}
+                      />
+                    </Td>
+                    <Td>
+                      <Truncate
+                        text={[...new Set(t.ticket_lines.map((l) => l.technicians?.full_name ?? "?"))].join(", ")}
+                        max={22}
                       />
                     </Td>
                     <Td>{t.payment_method}</Td>

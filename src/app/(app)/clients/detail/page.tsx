@@ -27,6 +27,16 @@ interface VisitRow {
   branch_id: string;
 }
 
+interface LineRow {
+  ticket_date: string;
+  service_name: string;
+  technician_name: string;
+  qty: number;
+  total_cents: number;
+  rating: number | null;
+  payment_method: string;
+}
+
 interface RetentionRow {
   visit_count: number;
   first_visit: string;
@@ -53,7 +63,7 @@ function ClientDetail() {
 
   const q = useQuery(async () => {
     const supabase = createClient();
-    const [client, visits, packages, retention] = await Promise.all([
+    const [client, visits, lines, packages, retention] = await Promise.all([
       supabase.from("clients").select("*").eq("id", id).single(),
       supabase
         .from("v_client_visits")
@@ -61,6 +71,12 @@ function ClientDetail() {
         .eq("client_id", id)
         .order("visit_date", { ascending: false })
         .limit(100),
+      supabase
+        .from("v_ticket_lines_active")
+        .select("ticket_date, service_name, technician_name, qty, total_cents, rating, payment_method")
+        .eq("client_id", id)
+        .order("ticket_date", { ascending: false })
+        .limit(500),
       supabase.from("packages").select("*, services(name)").eq("client_id", id),
       canSeeAnalytics
         ? supabase.from("v_client_retention").select("*").eq("client_id", id).maybeSingle()
@@ -69,6 +85,7 @@ function ClientDetail() {
     return {
       client: unwrap(client) as Client,
       visits: unwrap(visits) as VisitRow[],
+      lines: unwrap(lines) as LineRow[],
       packages: unwrap(packages) as (Package & { services: { name: string } })[],
       retention: (retention.data ?? null) as RetentionRow | null,
     };
@@ -81,8 +98,14 @@ function ClientDetail() {
     return <ErrorState message="This client did not load." onRetry={q.retry} />;
   }
 
-  const { client, visits, packages, retention } = q.data;
+  const { client, visits, lines, packages, retention } = q.data;
   const branchName = (bid: string) => branches.find((b) => b.id === bid)?.name ?? "";
+  const linesByDate = new Map<string, LineRow[]>();
+  for (const l of lines) {
+    const arr = linesByDate.get(l.ticket_date) ?? [];
+    arr.push(l);
+    linesByDate.set(l.ticket_date, arr);
+  }
 
   if (client.merged_into_id) {
     return (
@@ -140,6 +163,8 @@ function ClientDetail() {
         </Card>
       )}
 
+      {lines.length > 0 && <HabitsCard lines={lines} />}
+
       {packages.length > 0 && (
         <Card title="Packages">
           <Table>
@@ -181,19 +206,39 @@ function ClientDetail() {
               <tr>
                 <Th>Date</Th>
                 <Th>Branch</Th>
+                <Th>Services</Th>
+                <Th>Technician</Th>
+                <Th align="right">Rating</Th>
+                <Th>Paid by</Th>
                 <Th align="right">Spend</Th>
                 <Th align="right">Gap (days)</Th>
               </tr>
             </thead>
             <tbody>
-              {visits.map((v) => (
-                <tr key={v.visit_date}>
-                  <Td className="tnum">{v.visit_date}</Td>
-                  <Td>{branchName(v.branch_id)}</Td>
-                  <Td align="right" className="tnum">{formatCentavos(v.spend_cents)}</Td>
-                  <Td align="right" className="tnum">{v.days_since_previous ?? "—"}</Td>
-                </tr>
-              ))}
+              {visits.map((v) => {
+                const vl = linesByDate.get(v.visit_date) ?? [];
+                const services = vl
+                  .map((l) => (l.qty > 1 ? `${l.service_name} ×${l.qty}` : l.service_name))
+                  .join(", ");
+                const techs = [...new Set(vl.map((l) => l.technician_name))].join(", ");
+                const rated = vl.filter((l) => l.rating != null);
+                const rating = rated.length
+                  ? (rated.reduce((s, l) => s + (l.rating ?? 0), 0) / rated.length).toFixed(1)
+                  : "—";
+                const paid = [...new Set(vl.map((l) => l.payment_method))].join(", ");
+                return (
+                  <tr key={v.visit_date}>
+                    <Td className="tnum">{v.visit_date}</Td>
+                    <Td>{branchName(v.branch_id)}</Td>
+                    <Td><Truncate text={services || "—"} max={44} /></Td>
+                    <Td><Truncate text={techs || "—"} max={24} /></Td>
+                    <Td align="right" className="tnum">{rating}</Td>
+                    <Td>{paid || "—"}</Td>
+                    <Td align="right" className="tnum">{formatCentavos(v.spend_cents)}</Td>
+                    <Td align="right" className="tnum">{v.days_since_previous ?? "—"}</Td>
+                  </tr>
+                );
+              })}
             </tbody>
           </Table>
         )}
@@ -212,6 +257,62 @@ function ClientDetail() {
         onDone={(winnerId) => router.push(`/clients/detail?id=${winnerId}`)}
       />
     </div>
+  );
+}
+
+// What this client usually has, who usually serves them, and how they rate
+// it — the profile a receptionist can act on when the client walks in.
+function HabitsCard({ lines }: { lines: LineRow[] }) {
+  const svc = new Map<string, number>();
+  const tech = new Map<string, number>();
+  let ratedSum = 0, ratedN = 0;
+  const pay = new Map<string, number>();
+  for (const l of lines) {
+    svc.set(l.service_name, (svc.get(l.service_name) ?? 0) + l.qty);
+    tech.set(l.technician_name, (tech.get(l.technician_name) ?? 0) + 1);
+    if (l.rating != null) { ratedSum += l.rating; ratedN += 1; }
+    pay.set(l.payment_method, (pay.get(l.payment_method) ?? 0) + 1);
+  }
+  const top = (m: Map<string, number>, n: number) =>
+    [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+  const topSvc = top(svc, 3);
+  const [regularTech] = top(tech, 1);
+  const techShare = regularTech ? Math.round((regularTech[1] / lines.length) * 100) : 0;
+  const [usualPay] = top(pay, 1);
+
+  return (
+    <Card title="Habits">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+        <div data-stat>
+          <div className="text-[11px] text-text-muted">Usual services</div>
+          <div className="text-[13px] leading-relaxed">
+            {topSvc.map(([name, n]) => (
+              <div key={name}>
+                <Truncate text={name} max={26} />{" "}
+                <span className="text-text-muted tnum">×{n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <Metric
+          label="Regular technician"
+          value={regularTech ? regularTech[0] : "—"}
+        />
+        <Metric
+          label="Sticks with them"
+          value={regularTech ? `${techShare}% of services` : "—"}
+        />
+        <Metric
+          label="Average rating given"
+          value={ratedN ? `${(ratedSum / ratedN).toFixed(2)} (${ratedN} rated)` : "none yet"}
+        />
+      </div>
+      {usualPay && (
+        <p className="mt-4 text-[11px] text-text-muted">
+          Usually pays by {usualPay[0]}.
+        </p>
+      )}
+    </Card>
   );
 }
 
