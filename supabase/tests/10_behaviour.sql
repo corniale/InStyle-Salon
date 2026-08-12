@@ -303,21 +303,22 @@ begin
 
   -- Cash takings today: 300000 (the split ticket's cash leg) + 15000
   -- (test-key-2, defaulted to cash). The voided walk-in's 25000 is excluded.
-  -- Minus the 50000 cash expense = 265000 (no float row yet).
+  -- Minus technician shares 132000 (117000 + 7500 + 7500) paid out of the
+  -- drawer daily, minus the 50000 cash expense = 133000 (no float row yet).
   v_expected := expected_cash(v_main, business_date());
-  if v_expected <> 265000 then
+  if v_expected <> 133000 then
     raise exception 'expected cash wrong: %', v_expected;
   end if;
 
   -- Closing with a variance and no note must fail (edge case 21).
   begin
-    v_res := close_cash_day(v_main, business_date(), 250000, null);
+    v_res := close_cash_day(v_main, business_date(), 120000, null);
     raise exception 'variance closed without a note';
   exception when check_violation then null;
   end;
 
-  v_res := close_cash_day(v_main, business_date(), 250000, 'PHP 150 short, change float miscount');
-  if (v_res ->> 'variance_cents')::bigint <> -15000 then
+  v_res := close_cash_day(v_main, business_date(), 120000, 'PHP 130 short, change float miscount');
+  if (v_res ->> 'variance_cents')::bigint <> -13000 then
     raise exception 'variance wrong: %', v_res ->> 'variance_cents';
   end if;
 

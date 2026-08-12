@@ -1,9 +1,11 @@
 "use client";
 
-// Daily cash (spec §2): takings, petty cash expenses, running balance and
-// end-of-day reconciliation. Expected cash is computed server-side, never
-// stored; a non-zero variance requires a note before close (edge case 21);
-// a closed day locks its takings (edge case 12); reopening is manager+.
+// Daily cash (spec §2): the paper Daily Record's statement — gross sales,
+// technician shares paid from the drawer, non-cash payments straight to the
+// account, expenses/withdrawals, down to net cash to remit. Expected cash is
+// computed server-side, never stored; a non-zero variance requires a note
+// before close (edge case 21); a closed day locks its takings (edge case 12);
+// reopening is manager+.
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
@@ -28,6 +30,14 @@ interface DailyCashRow {
   variance_cents: number | null;
   closed_at: string | null;
   note: string | null;
+  gross_sales_cents: number;
+  technician_share_cents: number;
+  company_share_cents: number;
+  discounts_cents: number;
+  gcash_takings_cents: number;
+  maya_takings_cents: number;
+  bank_card_takings_cents: number;
+  package_comp_cents: number;
 }
 
 interface ExpenseRow {
@@ -132,11 +142,10 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
         {q.status === "error" && <ErrorState message="The cash day did not load." onRetry={q.retry} />}
         {q.status === "ready" && (
           <>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-              <Stat label="Opening float" value={formatCentavos(day?.opening_float_cents ?? 0)} />
-              <Stat label="Cash takings" value={formatCentavos(day?.cash_takings_cents ?? 0)} />
-              <Stat label="Cash expenses" value={formatCentavos(day?.cash_expenses_cents ?? 0)} />
-              <Stat label="Expected in drawer" value={formatCentavos(day?.expected_cash_cents ?? 0)} hero />
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Stat label="Gross sales" value={formatCentavos(day?.gross_sales_cents ?? 0)} />
+              <Stat label="Company share" value={formatCentavos(day?.company_share_cents ?? 0)} />
+              <Stat label="Net cash to remit" value={formatCentavos(day?.expected_cash_cents ?? 0)} hero />
               <Stat
                 label={closed ? "Variance at close" : "Counted"}
                 value={
@@ -154,6 +163,31 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
               />
             </div>
 
+            <div className="mt-4 max-w-md space-y-1 text-[13px]">
+              <StmtRow label="Gross sales" cents={day?.gross_sales_cents ?? 0} />
+              <StmtRow label="Technician share (paid from drawer)"
+                cents={day?.technician_share_cents ?? 0} negative />
+              <StmtRow label="Company share" cents={day?.company_share_cents ?? 0} bold top />
+              <StmtRow label="GCash payments (straight to account)"
+                cents={day?.gcash_takings_cents ?? 0} negative />
+              <StmtRow label="Maya payments (straight to account)"
+                cents={day?.maya_takings_cents ?? 0} negative />
+              {(day?.bank_card_takings_cents ?? 0) !== 0 && (
+                <StmtRow label="Bank / card (straight to account)"
+                  cents={day?.bank_card_takings_cents ?? 0} negative />
+              )}
+              {(day?.package_comp_cents ?? 0) !== 0 && (
+                <StmtRow label="Package / comp (no cash received)"
+                  cents={day?.package_comp_cents ?? 0} negative />
+              )}
+              <StmtRow label="Cash expenses & withdrawals"
+                cents={day?.cash_expenses_cents ?? 0} negative />
+              {(day?.opening_float_cents ?? 0) !== 0 && (
+                <StmtRow label="Opening float" cents={day?.opening_float_cents ?? 0} />
+              )}
+              <StmtRow label="Net cash to remit" cents={day?.expected_cash_cents ?? 0} bold top />
+            </div>
+
             <div className="mt-4 flex items-center justify-between">
               <div className="text-[11px] text-text-muted">
                 {closed ? (
@@ -162,7 +196,12 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
                     this day are locked.
                   </>
                 ) : (
-                  <>Non-cash takings today: {formatCentavos(day?.non_cash_takings_cents ?? 0)}</>
+                  <>
+                    Record withdrawals, parcels and sahod under Petty cash expenses so they are
+                    deducted here.
+                    {(day?.discounts_cents ?? 0) > 0 &&
+                      ` Discounts given today: ${formatCentavos(day?.discounts_cents ?? 0)} (already off gross).`}
+                  </>
                 )}
               </div>
               {closed ? (
@@ -200,6 +239,29 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
         onClose={() => setCloseOpen(false)}
         onDone={() => { setCloseOpen(false); q.retry(); }}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// One line of the Daily Record statement: gross → labor → company share →
+// non-cash payments → expenses → net cash to remit.
+// ---------------------------------------------------------------------------
+
+function StmtRow({ label, cents, negative, bold, top }: {
+  label: string;
+  cents: number;
+  negative?: boolean;
+  bold?: boolean;
+  top?: boolean;
+}) {
+  return (
+    <div className={`flex items-baseline justify-between gap-4${top ? " border-t border-border pt-1" : ""}`}>
+      <span className={bold ? "font-bold" : "text-text-muted"}>{label}</span>
+      <span className={`tnum${bold ? " font-bold" : ""}`}>
+        {negative && cents !== 0 ? "−" : ""}
+        {formatCentavos(cents)}
+      </span>
     </div>
   );
 }
@@ -372,7 +434,7 @@ function CloseModal({ open, branchId, date, expected, onClose, onDone }: {
     <Modal title={`Close ${date}`} open={open} onClose={onClose}>
       <div className="space-y-4">
         <div className="rounded-[4px] bg-surface-page p-2 text-[13px] tnum">
-          Expected in drawer: <span className="font-bold">{formatCentavos(expected)}</span>
+          Net cash to remit: <span className="font-bold">{formatCentavos(expected)}</span>
         </div>
 
         <Field label="Counted cash (₱)" error={error ?? undefined}>

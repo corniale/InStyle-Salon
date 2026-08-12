@@ -21,6 +21,8 @@ automation** — every screen must change a decision the owner makes.
 supabase/migrations/   0001 schema · 0002 rules/triggers · 0003 RPCs
                        0004 views · 0005 RLS · 0006 analytics fns
                        0007 auth trigger · 0008 catalogue seed
+                       0009 businesses · 0010 branding · 0011 import prep
+                       0012 birthdays · 0013 daily record statement
 supabase/tests/        run.sh applies everything to a throwaway Postgres and
                        runs the behavioural suite (RLS, anon probe, cash
                        rules, packages, merge, idempotent replay)
@@ -46,7 +48,7 @@ design and RLS is the control. Auth gating is client-side
 ## Setup
 
 1. Create a Supabase project, then apply migrations in order:
-   `supabase/migrations/0001…0008` (via `supabase db push` or the SQL
+   `supabase/migrations/0001…0013` (via `supabase db push` or the SQL
    editor). `0008_seed.sql` loads the catalogue, branch price lists and
    technician roster; edit it to match reality before running.
 2. Copy `.env.example` to `.env.local` and fill in the project URL and anon
