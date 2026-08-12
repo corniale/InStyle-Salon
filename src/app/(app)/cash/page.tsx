@@ -44,11 +44,47 @@ function todayISO(): string {
 }
 
 export default function CashPage() {
-  const { branchId, branches, profile, isManagerUp } = useSession();
-  // Cash is inherently per-branch; owner on consolidated picks one.
-  const [pickedBranch, setPickedBranch] = useState(branchId ?? profile.branch_id ?? branches[0]?.id ?? "");
-  const effectiveBranch = branchId ?? pickedBranch;
+  const { branchId, branches } = useSession();
   const [date, setDate] = useState(todayISO());
+
+  // The header's branch switcher is the only filter. "All" shows each
+  // branch's drawer as its own section — two physical drawers cannot be
+  // reconciled as one.
+  const shown = branchId ? branches.filter((b) => b.id === branchId) : branches;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-[20px] font-bold">Daily cash</h1>
+        <Input type="date" value={date} max={todayISO()}
+          onChange={(e) => setDate(e.target.value)} className="w-40" aria-label="Date" />
+      </div>
+
+      {shown.length === 0 && (
+        <EmptyState message="No branch is visible to this account." />
+      )}
+      {shown.map((b) => (
+        <BranchCashSection
+          key={b.id}
+          branchId={b.id}
+          branchName={b.name}
+          showName={shown.length > 1}
+          date={date}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+function BranchCashSection({ branchId, branchName, showName, date }: {
+  branchId: string;
+  branchName: string;
+  showName: boolean;
+  date: string;
+}) {
+  const { isManagerUp } = useSession();
   const [closeOpen, setCloseOpen] = useState(false);
   const [reopenBusy, setReopenBusy] = useState(false);
 
@@ -58,13 +94,13 @@ export default function CashPage() {
       supabase
         .from("v_daily_cash")
         .select("*")
-        .eq("branch_id", effectiveBranch)
+        .eq("branch_id", branchId)
         .eq("business_date", date)
         .maybeSingle(),
       supabase
         .from("expenses")
         .select("id, spent_on, category, amount_cents, description, paid_from")
-        .eq("branch_id", effectiveBranch)
+        .eq("branch_id", branchId)
         .eq("spent_on", date)
         .order("created_at", { ascending: false }),
     ]);
@@ -73,11 +109,11 @@ export default function CashPage() {
       day: (day.data ?? null) as DailyCashRow | null,
       expenses: unwrap(expenses) as ExpenseRow[],
     };
-  }, [effectiveBranch, date]);
+  }, [branchId, date]);
 
   async function reopen() {
     setReopenBusy(true);
-    await createClient().rpc("reopen_cash_day", { p_branch: effectiveBranch, p_date: date });
+    await createClient().rpc("reopen_cash_day", { p_branch: branchId, p_date: date });
     setReopenBusy(false);
     q.retry();
   }
@@ -87,25 +123,9 @@ export default function CashPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-[20px] font-bold">Daily cash</h1>
-        <div className="flex items-center gap-2">
-          {branchId === null && (
-            <Select
-              value={pickedBranch}
-              onChange={(e) => setPickedBranch(e.target.value)}
-              className="w-40"
-              aria-label="Branch"
-            >
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </Select>
-          )}
-          <Input type="date" value={date} max={todayISO()}
-            onChange={(e) => setDate(e.target.value)} className="w-40" aria-label="Date" />
-        </div>
-      </div>
+      {showName && (
+        <h2 className="text-[15px] font-bold">{branchName}</h2>
+      )}
 
       <Card>
         {q.status === "loading" && <SkeletonRows rows={2} cols={5} />}
@@ -161,10 +181,10 @@ export default function CashPage() {
         )}
       </Card>
 
-      <TechnicianEarningsCard branchId={effectiveBranch} date={date} />
+      <TechnicianEarningsCard branchId={branchId} date={date} />
 
       <ExpensesCard
-        branchId={effectiveBranch}
+        branchId={branchId}
         date={date}
         locked={closed}
         expenses={q.status === "ready" ? q.data.expenses : null}
@@ -174,7 +194,7 @@ export default function CashPage() {
 
       <CloseModal
         open={closeOpen}
-        branchId={effectiveBranch}
+        branchId={branchId}
         date={date}
         expected={day?.expected_cash_cents ?? 0}
         onClose={() => setCloseOpen(false)}
@@ -435,7 +455,7 @@ function TechnicianEarningsCard({ branchId, date }: { branchId: string; date: st
   }, [branchId, date]);
 
   return (
-    <Card title="Technician earnings">
+    <Card title="Earnings by technician">
       {q.status === "loading" && <SkeletonRows rows={4} cols={5} />}
       {q.status === "error" && (
         <ErrorState message="Technician earnings did not load." onRetry={q.retry} />
