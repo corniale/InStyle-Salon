@@ -84,8 +84,9 @@ These are working defaults, all reversible, flagged for client confirmation:
 3. **Branch price differences** — modelled as deliberate: per-branch price
    lists, with a dashboard alert listing every divergence so it stays
    deliberate.
-4. **Missing May** — imported as missing; charts render a gap and never
-   interpolate across it.
+4. **"Missing" May** — resolved by the import: May's sales were complete
+   and match the workbook dashboards; it was the client names that went
+   unrecorded that month. (Charts still render true gaps as gaps.)
 5. **Gift certificates** — rarely sold; recorded as a comp/discount line by
    agreement. No dedicated GC concept in Stage 1.
 6–8. Open with the client; nothing in the build blocks any answer.
