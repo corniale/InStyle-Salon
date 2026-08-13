@@ -80,11 +80,14 @@ const SERVICE_ACC: Record<string, (r: SvcRow) => unknown> = {
 };
 
 function ServicesTab({ branches }: { branches: Branch[] }) {
-  const { businessId } = useSession();
+  const { businessId, branchId } = useSession();
   const [editing, setEditing] = useState<{ service: Service; branch: Branch; current: number | null } | null>(null);
   const [serviceEditing, setServiceEditing] = useState<Service | null>(null);
   const [typeFilter, setTypeFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"" | "active" | "retired">("");
+  const [statusFilter, setStatusFilter] = useState<"" | "active" | "retired">("active");
+
+  // The header's branch switcher decides which price columns show.
+  const shownBranches = branchId ? branches.filter((b) => b.id === branchId) : branches;
 
   const q = useQuery(async () => {
     const supabase = createClient();
@@ -152,9 +155,9 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
       </p>
 
       <div className="mb-4 flex flex-wrap items-end justify-between gap-4 border-b border-border pb-4">
-        <div className="flex flex-wrap gap-4">
-          <AddServiceInline types={data?.types ?? []} onChanged={q.retry} />
-          <AddServiceTypeInline businessId={businessId} onChanged={q.retry} />
+        <div className="flex items-end gap-2">
+          <AddServiceButton types={data?.types ?? []} onChanged={q.retry} />
+          <AddServiceTypeButton businessId={businessId} onChanged={q.retry} />
         </div>
         <div className="flex items-end gap-2">
           <Field label="Type">
@@ -169,9 +172,9 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
           <Field label="Status">
             <Select value={statusFilter} className="w-32"
               onChange={(e) => setStatusFilter(e.target.value as "" | "active" | "retired")}>
-              <option value="">All</option>
               <option value="active">Active</option>
               <option value="retired">Retired</option>
+              <option value="">All</option>
             </Select>
           </Field>
         </div>
@@ -188,7 +191,7 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
               <Th {...th("type")}>Type</Th>
               <Th align="right" {...th("share")}>Company share</Th>
               <Th align="right" {...th("duration")}>Duration</Th>
-              {branches.map((b) => (
+              {shownBranches.map((b) => (
                 <Th key={b.id} align="right" {...th(`price:${b.id}`)}>{b.name} price</Th>
               ))}
               <Th {...th("status")}>Status</Th>
@@ -210,7 +213,7 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
                   </button>
                 </Td>
                 <Td align="right" className="tnum">{s.default_duration_min} min</Td>
-                {branches.map((b) => {
+                {shownBranches.map((b) => {
                   const p = data?.priceMap.get(`${b.id}:${s.id}`);
                   return (
                     <Td key={b.id} align="right" className="tnum">
@@ -254,7 +257,7 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
   );
 }
 
-function AddServiceInline({ types, onChanged }: { types: ServiceType[]; onChanged: () => void }) {
+function AddServiceButton({ types, onChanged }: { types: ServiceType[]; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [typeId, setTypeId] = useState("");
@@ -291,38 +294,46 @@ function AddServiceInline({ types, onChanged }: { types: ServiceType[]; onChange
     onChanged();
   }
 
-  if (!open) return <Button onClick={() => setOpen(true)}>Add service</Button>;
   return (
-    <span className="flex flex-wrap items-end gap-2">
-      <Field label="Service name" error={error ?? undefined}>
-        <Input value={name} className="w-48" invalid={!!error}
-          onChange={(e) => setName(e.target.value)} />
-      </Field>
-      <Field label="Type">
-        <Select value={typeId} className="w-36" onChange={(e) => setTypeId(e.target.value)}>
-          <option value="">—</option>
-          {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </Select>
-      </Field>
-      <Field label="Company share (%)">
-        <Input inputMode="numeric" value={ratePct} className="w-24"
-          onChange={(e) => setRatePct(e.target.value)} />
-      </Field>
-      <Field label="Duration (min)">
-        <Input inputMode="numeric" value={duration} className="w-24"
-          onChange={(e) => setDuration(e.target.value)} />
-      </Field>
-      <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>Add</Button>
-      <Button onClick={() => setOpen(false)}>Cancel</Button>
-      <span className="mb-2 w-full text-[11px] text-text-muted">
-        New services start with no price — set each branch&apos;s price in the table above, or they
-        show as &ldquo;not offered&rdquo;.
-      </span>
-    </span>
+    <>
+      <Button variant="primary" onClick={() => setOpen(true)}>Add service</Button>
+      <Modal title="Add service" open={open} onClose={() => setOpen(false)}>
+        <p className="mb-4 text-[13px] text-text-muted">
+          New services start with no price — after adding, set each branch&apos;s price straight
+          from the table, or the service shows as &ldquo;not offered&rdquo;.
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Service name" error={error ?? undefined}>
+            <Input value={name} autoFocus invalid={!!error}
+              onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="Type">
+            <Select value={typeId} onChange={(e) => setTypeId(e.target.value)}>
+              <option value="">—</option>
+              {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="Company share (%)">
+            <Input inputMode="numeric" value={ratePct}
+              onChange={(e) => setRatePct(e.target.value)} />
+          </Field>
+          <Field label="Duration (min)">
+            <Input inputMode="numeric" value={duration}
+              onChange={(e) => setDuration(e.target.value)} />
+          </Field>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>
+            Add service
+          </Button>
+        </div>
+      </Modal>
+    </>
   );
 }
 
-function AddServiceTypeInline({ businessId, onChanged }: {
+function AddServiceTypeButton({ businessId, onChanged }: {
   businessId: string | null;
   onChanged: () => void;
 }) {
@@ -352,16 +363,22 @@ function AddServiceTypeInline({ businessId, onChanged }: {
     onChanged();
   }
 
-  if (!open) return <Button onClick={() => setOpen(true)}>Add service type</Button>;
   return (
-    <span className="flex items-end gap-2">
-      <Field label="Type name" error={error ?? undefined}>
-        <Input value={name} className="w-40" invalid={!!error}
-          onChange={(e) => setName(e.target.value)} placeholder="e.g. Massage" />
-      </Field>
-      <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>Add</Button>
-      <Button onClick={() => setOpen(false)}>Cancel</Button>
-    </span>
+    <>
+      <Button onClick={() => setOpen(true)}>Add service type</Button>
+      <Modal title="Add service type" open={open} onClose={() => setOpen(false)}>
+        <Field label="Type name" error={error ?? undefined}>
+          <Input value={name} autoFocus invalid={!!error}
+            onChange={(e) => setName(e.target.value)} placeholder="e.g. Massage" />
+        </Field>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>
+            Add type
+          </Button>
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -598,35 +615,53 @@ const ROSTER_ACC: Record<string, (r: RosterRow) => unknown> = {
 };
 
 function TechniciansTab({ branches }: { branches: Branch[] }) {
+  const { branchId } = useSession();
   const [addOpen, setAddOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"" | "active" | "retired">("active");
 
   const q = useQuery(async () => {
     const res = await createClient().from("technicians").select("*").order("full_name");
     return unwrap(res) as Technician[];
   }, []);
 
+  // The header's branch switcher filters the roster like everywhere else.
   const rosterRows = useMemo(() => {
     if (q.status !== "ready") return null;
-    return q.data.map((t): RosterRow => ({
-      t,
-      branchName: branches.find((b) => b.id === t.branch_id)?.name ?? "—",
-    }));
-  }, [q.status, q.data, branches]);
+    return q.data
+      .filter((t) => !branchId || t.branch_id === branchId)
+      .filter((t) =>
+        statusFilter === "" ? true : statusFilter === "active" ? t.active : !t.active)
+      .map((t): RosterRow => ({
+        t,
+        branchName: branches.find((b) => b.id === t.branch_id)?.name ?? "—",
+      }));
+  }, [q.status, q.data, branches, branchId, statusFilter]);
   const { rows, th } = useSort(rosterRows, ROSTER_ACC);
 
   return (
     <Card title="Technicians">
-      <div className="mb-4 flex items-center justify-between gap-4">
-        <p className="text-[11px] text-text-muted">
-          Retiring a technician removes them from new-ticket pickers; their history stays
-          (edge case: staff who leave mid-month).
-        </p>
+      <p className="mb-4 text-[11px] text-text-muted">
+        Retiring a technician removes them from new-ticket pickers; their history stays
+        (edge case: staff who leave mid-month).
+      </p>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-4 border-b border-border pb-4">
         <Button variant="primary" onClick={() => setAddOpen(true)}>Add technician</Button>
+        <Field label="Status">
+          <Select value={statusFilter} className="w-32"
+            onChange={(e) => setStatusFilter(e.target.value as "" | "active" | "retired")}>
+            <option value="active">Active</option>
+            <option value="retired">Retired</option>
+            <option value="">All</option>
+          </Select>
+        </Field>
       </div>
 
       {q.status === "loading" && <SkeletonRows rows={6} cols={3} />}
       {q.status === "error" && <ErrorState message="Technicians did not load." onRetry={q.retry} />}
-      {rows != null && (
+      {rows != null && rows.length === 0 && (
+        <EmptyState message="No technicians match this branch and status." />
+      )}
+      {rows != null && rows.length > 0 && (
         <Table>
           <thead>
             <tr>
@@ -659,8 +694,10 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
       )}
 
       <AddTechnicianModal
+        key={branchId ?? "all"}
         open={addOpen}
         branches={branches}
+        initialBranchId={branchId ?? undefined}
         onClose={() => setAddOpen(false)}
         onDone={() => { setAddOpen(false); q.retry(); }}
       />
@@ -668,14 +705,15 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
   );
 }
 
-function AddTechnicianModal({ open, branches, onClose, onDone }: {
+function AddTechnicianModal({ open, branches, initialBranchId, onClose, onDone }: {
   open: boolean;
   branches: Branch[];
+  initialBranchId?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
   const [name, setName] = useState("");
-  const [branchId, setBranchId] = useState(branches[0]?.id ?? "");
+  const [branchId, setBranchId] = useState(initialBranchId ?? branches[0]?.id ?? "");
   const [hiredOn, setHiredOn] = useState(new Date().toLocaleDateString("sv-SE"));
   const [specialty, setSpecialty] = useState("");
   const [skill, setSkill] = useState("");

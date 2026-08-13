@@ -152,7 +152,7 @@ export function Th({ children, align = "left", className = "", sortDir, onSort }
 }) {
   return (
     <th
-      className={`border-b border-border px-4 py-2 text-[11px] font-bold text-text-muted ${alignClass[align]} ${className}`}
+      className={`whitespace-nowrap border-b border-border px-4 py-2 text-[11px] font-bold text-text-muted ${alignClass[align]} ${className}`}
     >
       {onSort ? (
         <button
@@ -233,7 +233,7 @@ export function Td({ children, align = "left", className = "", colSpan, title }:
     <td
       colSpan={colSpan}
       title={title}
-      className={`h-8 border-b border-border px-4 py-1 align-middle ${alignClass[align]} ${className}`}
+      className={`h-8 whitespace-nowrap border-b border-border px-4 py-1 align-middle ${alignClass[align]} ${className}`}
     >
       {children}
     </td>
