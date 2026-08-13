@@ -13,9 +13,10 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos } from "@/lib/money";
 import type { Client, Package } from "@/lib/types";
+import { useMemo } from "react";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
-  SkeletonRows, Table, Td, Th, Truncate,
+  SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 import { StatusBadge, MONTH_SHORT, formatBirthday } from "@/components/client-bits";
 
@@ -172,30 +173,7 @@ function ClientDetail() {
 
       {packages.length > 0 && (
         <Card title="Packages">
-          <Table>
-            <thead>
-              <tr>
-                <Th>Service</Th>
-                <Th align="right">Sessions left</Th>
-                <Th>Purchased</Th>
-                <Th>Expires</Th>
-                <Th align="right">Paid</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {packages.map((p) => (
-                <tr key={p.id}>
-                  <Td><Truncate text={p.services.name} /></Td>
-                  <Td align="right" className="tnum">
-                    {p.sessions_total - p.sessions_used} of {p.sessions_total}
-                  </Td>
-                  <Td className="tnum">{p.purchased_on}</Td>
-                  <Td className="tnum">{p.expires_on ?? "—"}</Td>
-                  <Td align="right" className="tnum">{formatCentavos(p.amount_paid_cents)}</Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+          <PackagesTable packages={packages} />
         </Card>
       )}
 
@@ -206,46 +184,7 @@ function ClientDetail() {
             action={<Link href="/tickets/new"><Button variant="primary">Add ticket</Button></Link>}
           />
         ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Date</Th>
-                <Th>Branch</Th>
-                <Th>Services</Th>
-                <Th>Technician</Th>
-                <Th align="right">Rating</Th>
-                <Th>Paid by</Th>
-                <Th align="right">Spend</Th>
-                <Th align="right">Gap (days)</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {visits.map((v) => {
-                const vl = linesByDate.get(v.visit_date) ?? [];
-                const services = vl
-                  .map((l) => (l.qty > 1 ? `${l.service_name} ×${l.qty}` : l.service_name))
-                  .join(", ");
-                const techs = [...new Set(vl.map((l) => l.technician_name))].join(", ");
-                const rated = vl.filter((l) => l.rating != null);
-                const rating = rated.length
-                  ? (rated.reduce((s, l) => s + (l.rating ?? 0), 0) / rated.length).toFixed(1)
-                  : "—";
-                const paid = [...new Set(vl.map((l) => l.payment_method))].join(", ");
-                return (
-                  <tr key={v.visit_date}>
-                    <Td className="tnum">{v.visit_date}</Td>
-                    <Td>{branchName(v.branch_id)}</Td>
-                    <Td><Truncate text={services || "—"} max={44} /></Td>
-                    <Td><Truncate text={techs || "—"} max={24} /></Td>
-                    <Td align="right" className="tnum">{rating}</Td>
-                    <Td>{paid || "—"}</Td>
-                    <Td align="right" className="tnum">{formatCentavos(v.spend_cents)}</Td>
-                    <Td align="right" className="tnum">{v.days_since_previous ?? "—"}</Td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
+          <VisitHistoryTable visits={visits} linesByDate={linesByDate} branchName={branchName} />
         )}
       </Card>
 
@@ -262,6 +201,128 @@ function ClientDetail() {
         onDone={(winnerId) => router.push(`/clients/detail?id=${winnerId}`)}
       />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Packages and visit history tables (sortable)
+// ---------------------------------------------------------------------------
+
+type PackageRow = Package & { services: { name: string } };
+
+const PACKAGE_ACC: Record<string, (p: PackageRow) => unknown> = {
+  service: (p) => p.services.name,
+  left: (p) => p.sessions_total - p.sessions_used,
+  purchased: (p) => p.purchased_on,
+  expires: (p) => p.expires_on,
+  paid: (p) => p.amount_paid_cents,
+};
+
+function PackagesTable({ packages }: { packages: PackageRow[] }) {
+  const { rows, th } = useSort(packages, PACKAGE_ACC);
+  if (rows == null) return null;
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <Th {...th("service")}>Service</Th>
+          <Th align="right" {...th("left")}>Sessions left</Th>
+          <Th {...th("purchased")}>Purchased</Th>
+          <Th {...th("expires")}>Expires</Th>
+          <Th align="right" {...th("paid")}>Paid</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((p) => (
+          <tr key={p.id}>
+            <Td><Truncate text={p.services.name} /></Td>
+            <Td align="right" className="tnum">
+              {p.sessions_total - p.sessions_used} of {p.sessions_total}
+            </Td>
+            <Td className="tnum">{p.purchased_on}</Td>
+            <Td className="tnum">{p.expires_on ?? "—"}</Td>
+            <Td align="right" className="tnum">{formatCentavos(p.amount_paid_cents)}</Td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
+interface VisitTableRow {
+  v: VisitRow;
+  branch: string;
+  services: string;
+  techs: string;
+  rating: number | null;
+  paid: string;
+}
+
+const VISIT_ACC: Record<string, (r: VisitTableRow) => unknown> = {
+  date: (r) => r.v.visit_date,
+  branch: (r) => r.branch,
+  services: (r) => r.services,
+  techs: (r) => r.techs,
+  rating: (r) => r.rating,
+  paid: (r) => r.paid,
+  spend: (r) => r.v.spend_cents,
+  gap: (r) => r.v.days_since_previous,
+};
+
+function VisitHistoryTable({ visits, linesByDate, branchName }: {
+  visits: VisitRow[];
+  linesByDate: Map<string, LineRow[]>;
+  branchName: (bid: string) => string;
+}) {
+  const enriched = useMemo(() => visits.map((v): VisitTableRow => {
+    const vl = linesByDate.get(v.visit_date) ?? [];
+    const rated = vl.filter((l) => l.rating != null);
+    return {
+      v,
+      branch: branchName(v.branch_id),
+      services: vl
+        .map((l) => (l.qty > 1 ? `${l.service_name} ×${l.qty}` : l.service_name))
+        .join(", "),
+      techs: [...new Set(vl.map((l) => l.technician_name))].join(", "),
+      rating: rated.length
+        ? rated.reduce((s, l) => s + (l.rating ?? 0), 0) / rated.length
+        : null,
+      paid: [...new Set(vl.map((l) => l.payment_method))].join(", "),
+    };
+  }), [visits, linesByDate, branchName]);
+
+  const { rows, th } = useSort(enriched, VISIT_ACC);
+  if (rows == null) return null;
+
+  return (
+    <Table>
+      <thead>
+        <tr>
+          <Th {...th("date")}>Date</Th>
+          <Th {...th("branch")}>Branch</Th>
+          <Th {...th("services")}>Services</Th>
+          <Th {...th("techs")}>Technician</Th>
+          <Th align="right" {...th("rating")}>Rating</Th>
+          <Th {...th("paid")}>Paid by</Th>
+          <Th align="right" {...th("spend")}>Spend</Th>
+          <Th align="right" {...th("gap")}>Gap (days)</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(({ v, branch, services, techs, rating, paid }) => (
+          <tr key={v.visit_date}>
+            <Td className="tnum">{v.visit_date}</Td>
+            <Td>{branch}</Td>
+            <Td><Truncate text={services || "—"} max={44} /></Td>
+            <Td><Truncate text={techs || "—"} max={24} /></Td>
+            <Td align="right" className="tnum">{rating != null ? rating.toFixed(1) : "—"}</Td>
+            <Td>{paid || "—"}</Td>
+            <Td align="right" className="tnum">{formatCentavos(v.spend_cents)}</Td>
+            <Td align="right" className="tnum">{v.days_since_previous ?? "—"}</Td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
   );
 }
 

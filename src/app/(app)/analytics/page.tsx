@@ -13,7 +13,7 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import {
-  Card, EmptyState, ErrorState, SkeletonRows, Stat, Table, Td, Th, Truncate,
+  Card, EmptyState, ErrorState, SkeletonRows, Stat, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 import { LineChart } from "@/components/charts";
 import { Pagination, StatusBadge } from "@/components/client-bits";
@@ -67,7 +67,7 @@ function MonthlyTrend({ branchId }: { branchId: string | null }) {
                 points: q.data.map((m) => ({ label: m.month.slice(0, 7), value: m.revenue_cents })),
               },
               {
-                name: "Kept",
+                name: "Sales, net commissions",
                 color: "var(--color-data-teal)",
                 dashed: true,
                 points: q.data.map((m) => ({ label: m.month.slice(0, 7), value: m.company_share_cents })),
@@ -146,6 +146,13 @@ interface RebookRow {
   p75_days: number | null;
 }
 
+const REBOOK_ACC: Record<string, (r: RebookRow) => unknown> = {
+  service: (r) => r.service_name,
+  median: (r) => r.median_days,
+  middle: (r) => r.p25_days,
+  samples: (r) => r.samples,
+};
+
 function RebookingByService({ branchId }: { branchId: string | null }) {
   const q = useQuery(async () => {
     const res = await createClient().rpc("f_rebooking_by_service", {
@@ -153,6 +160,7 @@ function RebookingByService({ branchId }: { branchId: string | null }) {
     });
     return unwrap(res) as RebookRow[];
   }, [branchId]);
+  const { rows, th } = useSort(q.status === "ready" ? q.data : null, REBOOK_ACC);
 
   return (
     <Card title="Rebooking interval by service">
@@ -163,18 +171,18 @@ function RebookingByService({ branchId }: { branchId: string | null }) {
           Not enough repeat visits yet — this fills in as history accumulates.
         </p>
       )}
-      {q.status === "ready" && q.data.length > 0 && (
+      {rows != null && rows.length > 0 && (
         <Table>
           <thead>
             <tr>
-              <Th>Service</Th>
-              <Th align="right">Median days to return</Th>
-              <Th align="right">Middle half</Th>
-              <Th align="right">Samples</Th>
+              <Th {...th("service")}>Service</Th>
+              <Th align="right" {...th("median")}>Median days to return</Th>
+              <Th align="right" {...th("middle")}>Middle half</Th>
+              <Th align="right" {...th("samples")}>Samples</Th>
             </tr>
           </thead>
           <tbody>
-            {q.data.map((r) => (
+            {rows.map((r) => (
               <tr key={r.service_id}>
                 <Td><Truncate text={r.service_name} /></Td>
                 <Td align="right" className="tnum font-bold">{r.median_days ?? "—"}</Td>
@@ -207,6 +215,17 @@ interface AtRiskRow {
 
 const AT_RISK_PAGE = 25;
 
+const AT_RISK_ACC: Record<string, (r: AtRiskRow) => unknown> = {
+  client: (r) => r.full_name ?? (r.phone_declined ? "Walk-in" : r.phone),
+  phone: (r) => (r.phone_declined ? null : r.phone),
+  visits: (r) => r.visit_count,
+  last: (r) => r.last_visit,
+  gap: (r) => r.median_interval_days,
+  overdue: (r) => r.days_overdue,
+  spend: (r) => r.lifetime_spend_cents,
+  status: (r) => r.status,
+};
+
 function AtRiskList({ branchId }: { branchId: string | null }) {
   const [page, setPage] = useState(0);
 
@@ -216,6 +235,7 @@ function AtRiskList({ branchId }: { branchId: string | null }) {
     });
     return unwrap(res) as AtRiskRow[];
   }, [branchId, page]);
+  const { rows, th } = useSort(q.status === "ready" ? q.data : null, AT_RISK_ACC);
 
   return (
     <Card title="Clients going quiet">
@@ -235,18 +255,18 @@ function AtRiskList({ branchId }: { branchId: string | null }) {
           <Table>
             <thead>
               <tr>
-                <Th>Client</Th>
-                <Th>Phone</Th>
-                <Th align="right">Visits</Th>
-                <Th>Last visit</Th>
-                <Th align="right">Usual gap</Th>
-                <Th align="right">Days overdue</Th>
-                <Th align="right">Lifetime spend</Th>
-                <Th>Status</Th>
+                <Th {...th("client")}>Client</Th>
+                <Th {...th("phone")}>Phone</Th>
+                <Th align="right" {...th("visits")}>Visits</Th>
+                <Th {...th("last")}>Last visit</Th>
+                <Th align="right" {...th("gap")}>Usual gap</Th>
+                <Th align="right" {...th("overdue")}>Days overdue</Th>
+                <Th align="right" {...th("spend")}>Lifetime spend</Th>
+                <Th {...th("status")}>Status</Th>
               </tr>
             </thead>
             <tbody>
-              {q.data.map((r) => (
+              {(rows ?? []).map((r) => (
                 <tr key={r.client_id}>
                   <Td>
                     <Link href={`/clients/detail?id=${r.client_id}`} className="font-bold hover:underline">

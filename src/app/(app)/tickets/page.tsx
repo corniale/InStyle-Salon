@@ -12,7 +12,7 @@ import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos } from "@/lib/money";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, SkeletonRows,
-  Table, Td, Th, Textarea, Truncate,
+  Table, Td, Th, Textarea, Truncate, useSort,
 } from "@/components/ui";
 import { listQueue, removeFromQueue, type QueuedTicket } from "@/lib/offline/queue";
 import { drainQueue } from "@/lib/offline/sync";
@@ -42,6 +42,19 @@ function todayISO(): string {
   return new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD, local time
 }
 
+const clientLabel = (t: TicketRow) =>
+  t.clients?.full_name ?? (t.clients?.phone_declined ? "Walk-in" : (t.clients?.phone ?? "—"));
+
+const TICKET_ACC: Record<string, (t: TicketRow) => unknown> = {
+  ticket: (t) => t.series_no,
+  client: clientLabel,
+  services: (t) => t.ticket_lines.map((l) => l.services?.name ?? "?").join(", "),
+  technician: (t) => t.ticket_lines.map((l) => l.technicians?.full_name ?? "?").join(", "),
+  payment: (t) => t.payment_method,
+  total: (t) => t.ticket_lines.reduce((s, l) => s + l.total_cents, 0),
+  share: (t) => t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0),
+};
+
 export default function TicketsPage() {
   const { branchId, branches, isManagerUp } = useSession();
   const [date, setDate] = useState(todayISO());
@@ -60,6 +73,8 @@ export default function TicketsPage() {
     if (branchId) query = query.eq("branch_id", branchId);
     return unwrap(await query) as unknown as TicketRow[];
   }, [branchId, date]);
+
+  const { rows, th } = useSort(q.status === "ready" ? q.data : null, TICKET_ACC);
 
   return (
     <div className="space-y-6">
@@ -105,22 +120,22 @@ export default function TicketsPage() {
             }
           />
         )}
-        {q.status === "ready" && q.data.length > 0 && (
+        {rows != null && rows.length > 0 && (
           <Table>
             <thead>
               <tr>
-                <Th>Ticket</Th>
-                <Th>Client</Th>
-                <Th>Services</Th>
-                <Th>Technician</Th>
-                <Th>Payment</Th>
-                <Th align="right">Total</Th>
-                <Th align="right">Company share</Th>
+                <Th {...th("ticket")}>Ticket</Th>
+                <Th {...th("client")}>Client</Th>
+                <Th {...th("services")}>Services</Th>
+                <Th {...th("technician")}>Technician</Th>
+                <Th {...th("payment")}>Payment</Th>
+                <Th align="right" {...th("total")}>Total</Th>
+                <Th align="right" {...th("share")}>Company share</Th>
                 <Th></Th>
               </tr>
             </thead>
             <tbody>
-              {q.data.map((t) => {
+              {rows.map((t) => {
                 const total = t.ticket_lines.reduce((s, l) => s + l.total_cents, 0);
                 const share = t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0);
                 const voided = t.voided_at != null;

@@ -4,13 +4,13 @@
 // headline figures, then the per-service matrix where a service sold at only
 // one branch reads "not offered", never zero (edge case 28).
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import {
-  Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate,
+  Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 
 const accentColor: Record<string, string> = {
@@ -189,25 +189,53 @@ function ServiceMatrix({ businessId, from, to }: { businessId: string | null; fr
 }
 
 function MatrixTable({ rows }: { rows: MatrixRow[] }) {
-  const branches = [...new Map(rows.map((r) => [r.branch_id, r.branch_code])).entries()];
-  const services = [...new Map(rows.map((r) => [r.service_id, r])).values()];
-  const cell = new Map(rows.map((r) => [`${r.service_id}:${r.branch_id}`, r]));
+  const branches = useMemo(
+    () => [...new Map(rows.map((r) => [r.branch_id, r.branch_code])).entries()],
+    [rows],
+  );
+  const services = useMemo(
+    () => [...new Map(rows.map((r) => [r.service_id, r])).values()],
+    [rows],
+  );
+  const cell = useMemo(
+    () => new Map(rows.map((r) => [`${r.service_id}:${r.branch_id}`, r])),
+    [rows],
+  );
+
+  const accessors = useMemo(() => {
+    const m: Record<string, (s: MatrixRow) => unknown> = {
+      service: (s) => s.service_name,
+    };
+    for (const [id] of branches) {
+      m[`price:${id}`] = (s) => {
+        const c = cell.get(`${s.service_id}:${id}`);
+        return c?.offered ? c.list_price_cents : null;
+      };
+      m[`rev:${id}`] = (s) => {
+        const c = cell.get(`${s.service_id}:${id}`);
+        return c?.offered ? (c.revenue_cents ?? 0) : null;
+      };
+    }
+    return m;
+  }, [branches, cell]);
+
+  const { rows: sortedServices, th } = useSort(services, accessors);
 
   return (
     <Table>
       <thead>
         <tr>
-          <Th>Service</Th>
+          <Th {...th("service")}>Service</Th>
           {branches.map(([id, code]) => (
-            <Th key={id} align="right">{code} price</Th>
+            <Th key={id} align="right" {...th(`price:${id}`)}>{code} price</Th>
           ))}
           {branches.map(([id, code]) => (
-            <Th key={`${id}-rev`} align="right">{code} sales · kept</Th>
+            <Th key={`${id}-rev`} align="right" {...th(`rev:${id}`)}>{code} sales · net</Th>
           ))}
         </tr>
       </thead>
       <tbody>
-        {services.map((s) => (
+        {(sortedServices ?? []).map((s) => (
           <tr key={s.service_id}>
             <Td>
               <Truncate text={s.service_name} />

@@ -11,7 +11,7 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos } from "@/lib/money";
 import {
-  Button, Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate,
+  Button, Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 import { Pagination, StatusBadge, formatBirthday, CLIENTS_PAGE_SIZE as PAGE } from "@/components/client-bits";
 
@@ -31,6 +31,17 @@ interface RetentionRow {
   lifetime_spend_cents: number;
   status: string;
 }
+
+type ClientListRow = ClientRow & { ret: RetentionRow | null };
+
+const CLIENT_ACC: Record<string, (c: ClientListRow) => unknown> = {
+  name: (c) => c.full_name ?? (c.phone_declined ? "Walk-in" : c.phone),
+  phone: (c) => (c.phone_declined ? null : c.phone),
+  town: (c) => c.town,
+  visits: (c) => c.ret?.visit_count ?? null,
+  spend: (c) => c.ret?.lifetime_spend_cents ?? null,
+  status: (c) => c.ret?.status ?? null,
+};
 
 export default function ClientsPage() {
   const { canSeeAnalytics } = useSession();
@@ -65,8 +76,13 @@ export default function ClientsPage() {
       retention = new Map(((data ?? []) as RetentionRow[]).map((r) => [r.client_id, r]));
     }
 
-    return { rows, retention, total: res.count ?? rows.length };
+    return {
+      rows: rows.map((c) => ({ ...c, ret: retention.get(c.id) ?? null })),
+      total: res.count ?? rows.length,
+    };
   }, [search, page, canSeeAnalytics]);
+
+  const { rows, th } = useSort(q.status === "ready" ? q.data.rows : null, CLIENT_ACC);
 
   return (
     <div className="space-y-6">
@@ -102,26 +118,26 @@ export default function ClientsPage() {
             }
           />
         )}
-        {q.status === "ready" && q.data.rows.length > 0 && (
+        {q.status === "ready" && rows != null && rows.length > 0 && (
           <>
             <Table>
               <thead>
                 <tr>
-                  <Th>Name</Th>
-                  <Th>Phone</Th>
-                  <Th>Town</Th>
+                  <Th {...th("name")}>Name</Th>
+                  <Th {...th("phone")}>Phone</Th>
+                  <Th {...th("town")}>Town</Th>
                   {canSeeAnalytics && (
                     <>
-                      <Th align="right">Visits</Th>
-                      <Th align="right">Lifetime spend</Th>
-                      <Th>Status</Th>
+                      <Th align="right" {...th("visits")}>Visits</Th>
+                      <Th align="right" {...th("spend")}>Lifetime spend</Th>
+                      <Th {...th("status")}>Status</Th>
                     </>
                   )}
                 </tr>
               </thead>
               <tbody>
-                {q.data.rows.map((c) => {
-                  const r = q.data.retention.get(c.id);
+                {rows.map((c) => {
+                  const r = c.ret;
                   return (
                     <tr key={c.id}>
                       <Td>
@@ -172,29 +188,39 @@ interface BirthdayRow {
   lifetime_spend_cents: number;
 }
 
+const BIRTHDAY_ACC: Record<string, (r: BirthdayRow) => unknown> = {
+  client: (r) => r.full_name ?? r.phone,
+  birthday: (r) => r.birth_month * 100 + r.birth_day,
+  days: (r) => r.days_until,
+  phone: (r) => (r.phone_declined ? null : r.phone),
+  visits: (r) => r.visit_count,
+  spend: (r) => r.lifetime_spend_cents,
+};
+
 function BirthdaysCard() {
   const q = useQuery(async () => {
     const res = await createClient().rpc("f_upcoming_birthdays", { p_days: 30 });
     return unwrap(res) as BirthdayRow[];
   }, []);
+  const { rows, th } = useSort(q.status === "ready" ? q.data : null, BIRTHDAY_ACC);
 
-  if (q.status !== "ready" || q.data.length === 0) return null;
+  if (rows == null || rows.length === 0) return null;
 
   return (
     <Card title="Birthdays in the next 30 days">
       <Table>
         <thead>
           <tr>
-            <Th>Client</Th>
-            <Th>Birthday</Th>
-            <Th align="right">In</Th>
-            <Th>Phone</Th>
-            <Th align="right">Visits</Th>
-            <Th align="right">Lifetime spend</Th>
+            <Th {...th("client")}>Client</Th>
+            <Th {...th("birthday")}>Birthday</Th>
+            <Th align="right" {...th("days")}>In</Th>
+            <Th {...th("phone")}>Phone</Th>
+            <Th align="right" {...th("visits")}>Visits</Th>
+            <Th align="right" {...th("spend")}>Lifetime spend</Th>
           </tr>
         </thead>
         <tbody>
-          {q.data.map((r) => (
+          {rows.map((r) => (
             <tr key={r.client_id}>
               <Td>
                 <Link href={`/clients/detail?id=${r.client_id}`} className="font-bold hover:underline">

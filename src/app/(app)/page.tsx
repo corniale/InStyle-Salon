@@ -233,7 +233,7 @@ function SalesTrendTile({ branchId, from, to }: {
               points: q.data.map((d) => ({ label: d.day, value: d.revenue_cents })),
             },
             {
-              name: "Kept",
+              name: "Sales, net commissions",
               color: "var(--color-data-teal)",
               dashed: true,
               points: q.data.map((d) => ({ label: d.day, value: d.company_share_cents })),
@@ -277,7 +277,7 @@ function ServiceTile({ branchId, from, to }: { branchId: string | null; from: st
           items={q.data.map((s) => ({
             label: s.service_name,
             value: s.revenue_cents,
-            sub: `kept ${formatCentavos(s.company_share_cents)} · ${formatPct(s.margin_pct)} · ${s.units}×`,
+            sub: `net ${formatCentavos(s.company_share_cents)} · ${formatPct(s.margin_pct)} · ${s.units}×`,
           }))}
         />
       )}

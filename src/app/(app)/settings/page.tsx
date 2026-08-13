@@ -5,7 +5,7 @@
 // reflects it. Price changes insert a new effective_from row — history is
 // never rewritten (edge case 17).
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -13,7 +13,7 @@ import { formatCentavos, parsePesos } from "@/lib/money";
 import type { Branch, Service, ServiceType, Technician } from "@/lib/types";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
-  SkeletonRows, Table, Td, Th, Truncate,
+  SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 
 interface PriceRow { branch_id: string; service_id: string; price_cents: number; effective_from: string }
@@ -68,10 +68,21 @@ function SettingsBody() {
 // Services and prices
 // ---------------------------------------------------------------------------
 
+interface SvcRow { s: Service; typeName: string }
+
+const SERVICE_ACC: Record<string, (r: SvcRow) => unknown> = {
+  service: (r) => r.s.name,
+  type: (r) => r.typeName,
+  share: (r) => Number(r.s.default_sharing_rate),
+  status: (r) => (r.s.active ? "Active" : "Retired"),
+};
+
 function ServicesTab({ branches }: { branches: Branch[] }) {
   const { businessId } = useSession();
   const [editing, setEditing] = useState<{ service: Service; branch: Branch; current: number | null } | null>(null);
   const [rateEditing, setRateEditing] = useState<Service | null>(null);
+  const [typeFilter, setTypeFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"" | "active" | "retired">("");
 
   const q = useQuery(async () => {
     const supabase = createClient();
@@ -102,12 +113,33 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
     };
   }, [businessId]);
 
+  const data = q.status === "ready" ? q.data : null;
+
+  const filtered = useMemo(() => {
+    if (!data) return null;
+    const typeName = new Map(data.types.map((t) => [t.id, t.name]));
+    return data.services
+      .filter((s) => (typeFilter === "" || s.service_type_id === typeFilter))
+      .filter((s) =>
+        statusFilter === "" ? true : statusFilter === "active" ? s.active : !s.active)
+      .map((s): SvcRow => ({ s, typeName: typeName.get(s.service_type_id) ?? "—" }));
+  }, [data, typeFilter, statusFilter]);
+
+  const accessors = useMemo(() => {
+    const m: Record<string, (r: SvcRow) => unknown> = { ...SERVICE_ACC };
+    for (const b of branches) {
+      m[`price:${b.id}`] = (r) =>
+        data?.priceMap.get(`${b.id}:${r.s.id}`)?.price_cents ?? null;
+    }
+    return m;
+  }, [branches, data]);
+
+  const { rows, th } = useSort(filtered, accessors);
+
   if (q.status === "loading") return <Card><SkeletonRows rows={10} cols={5} /></Card>;
   if (q.status === "error") {
     return <ErrorState message="Services did not load." onRetry={q.retry} />;
   }
-
-  const { types, services, priceMap } = q.data;
 
   return (
     <Card title="Services and prices">
@@ -115,64 +147,86 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
         Changing a price adds a new row effective today — past tickets keep the price they were
         sold at. The sharing rate shown is the company&apos;s side.
       </p>
-      <Table>
-        <thead>
-          <tr>
-            <Th>Service</Th>
-            <Th align="right">Company share</Th>
-            {branches.map((b) => (
-              <Th key={b.id} align="right">{b.name} price</Th>
-            ))}
-            <Th>Status</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {types.map((t) =>
-            services
-              .filter((s) => s.service_type_id === t.id)
-              .map((s) => (
-                <tr key={s.id} className={s.active ? "" : "opacity-50"}>
-                  <Td>
-                    <Truncate text={s.name} />
-                    <span className="ml-2 text-[11px] text-text-muted">{t.name}</span>
-                  </Td>
-                  <Td align="right" className="tnum">
-                    <button className="hover:underline" onClick={() => setRateEditing(s)}>
-                      {(Number(s.default_sharing_rate) * 100).toFixed(0)}%
-                    </button>
-                  </Td>
-                  {branches.map((b) => {
-                    const p = priceMap.get(`${b.id}:${s.id}`);
-                    return (
-                      <Td key={b.id} align="right" className="tnum">
-                        <button
-                          className="hover:underline"
-                          onClick={() =>
-                            setEditing({ service: s, branch: b, current: p?.price_cents ?? null })
-                          }
-                        >
-                          {p ? formatCentavos(p.price_cents) : (
-                            <span className="text-text-muted">not offered</span>
-                          )}
-                        </button>
-                      </Td>
-                    );
-                  })}
-                  <Td>
-                    <ToggleActive
-                      table="services" id={s.id} active={s.active} onChanged={q.retry}
-                    />
-                  </Td>
-                </tr>
-              )),
-          )}
-        </tbody>
-      </Table>
 
-      <div className="mt-4 flex flex-wrap gap-4 border-t border-border pt-4">
-        <AddServiceInline types={types} onChanged={q.retry} />
-        <AddServiceTypeInline businessId={businessId} onChanged={q.retry} />
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-4 border-b border-border pb-4">
+        <div className="flex flex-wrap gap-4">
+          <AddServiceInline types={data?.types ?? []} onChanged={q.retry} />
+          <AddServiceTypeInline businessId={businessId} onChanged={q.retry} />
+        </div>
+        <div className="flex items-end gap-2">
+          <Field label="Type">
+            <Select value={typeFilter} className="w-36"
+              onChange={(e) => setTypeFilter(e.target.value)}>
+              <option value="">All types</option>
+              {(data?.types ?? []).map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Status">
+            <Select value={statusFilter} className="w-32"
+              onChange={(e) => setStatusFilter(e.target.value as "" | "active" | "retired")}>
+              <option value="">All</option>
+              <option value="active">Active</option>
+              <option value="retired">Retired</option>
+            </Select>
+          </Field>
+        </div>
       </div>
+
+      {rows != null && rows.length === 0 && (
+        <EmptyState message="No services match these filters." />
+      )}
+      {rows != null && rows.length > 0 && (
+        <Table>
+          <thead>
+            <tr>
+              <Th {...th("service")}>Service</Th>
+              <Th {...th("type")}>Type</Th>
+              <Th align="right" {...th("share")}>Company share</Th>
+              {branches.map((b) => (
+                <Th key={b.id} align="right" {...th(`price:${b.id}`)}>{b.name} price</Th>
+              ))}
+              <Th {...th("status")}>Status</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ s, typeName }) => (
+              <tr key={s.id} className={s.active ? "" : "opacity-50"}>
+                <Td><Truncate text={s.name} /></Td>
+                <Td className="text-text-muted">{typeName}</Td>
+                <Td align="right" className="tnum">
+                  <button className="hover:underline" onClick={() => setRateEditing(s)}>
+                    {(Number(s.default_sharing_rate) * 100).toFixed(0)}%
+                  </button>
+                </Td>
+                {branches.map((b) => {
+                  const p = data?.priceMap.get(`${b.id}:${s.id}`);
+                  return (
+                    <Td key={b.id} align="right" className="tnum">
+                      <button
+                        className="hover:underline"
+                        onClick={() =>
+                          setEditing({ service: s, branch: b, current: p?.price_cents ?? null })
+                        }
+                      >
+                        {p ? formatCentavos(p.price_cents) : (
+                          <span className="text-text-muted">not offered</span>
+                        )}
+                      </button>
+                    </Td>
+                  );
+                })}
+                <Td>
+                  <ToggleActive
+                    table="services" id={s.id} name={s.name} active={s.active} onChanged={q.retry}
+                  />
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
 
       <PriceModal
         editing={editing}
@@ -410,32 +464,67 @@ function RateModal({ service, onClose, onDone }: {
   );
 }
 
-function ToggleActive({ table, id, active, onChanged }: {
+// A confirm modal guards the flip — a stray click must not silently retire
+// or restore anything.
+function ToggleActive({ table, id, name, active, onChanged }: {
   table: "services" | "technicians";
   id: string;
+  name: string;
   active: boolean;
   onChanged: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  async function apply() {
+    setBusy(true);
+    await createClient().from(table).update({ active: !active }).eq("id", id);
+    setBusy(false);
+    setConfirming(false);
+    onChanged();
+  }
+
   return (
-    <button
-      className="text-[11px] hover:underline disabled:opacity-50"
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        await createClient().from(table).update({ active: !active }).eq("id", id);
-        setBusy(false);
-        onChanged();
-      }}
-    >
-      {active ? "Active — retire" : "Retired — restore"}
-    </button>
+    <>
+      <button
+        className="text-[11px] hover:underline"
+        onClick={() => setConfirming(true)}
+      >
+        {active ? "Active — retire" : "Retired — restore"}
+      </button>
+      <Modal
+        title={active ? `Retire ${name}?` : `Restore ${name}?`}
+        open={confirming}
+        onClose={() => setConfirming(false)}
+      >
+        <p className="mb-4 text-[13px] text-text-muted">
+          {active
+            ? "Retired items disappear from new-ticket pickers. History keeps them, and they can be restored here any time."
+            : "Restoring makes it available again when entering new tickets."}
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => setConfirming(false)}>Cancel</Button>
+          <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void apply()}>
+            {active ? "Retire" : "Restore"}
+          </Button>
+        </div>
+      </Modal>
+    </>
   );
 }
 
 // ---------------------------------------------------------------------------
 // Technicians
 // ---------------------------------------------------------------------------
+
+interface RosterRow { t: Technician; branchName: string }
+
+const ROSTER_ACC: Record<string, (r: RosterRow) => unknown> = {
+  name: (r) => r.t.full_name,
+  branch: (r) => r.branchName,
+  hired: (r) => r.t.hired_on,
+  status: (r) => (r.t.active ? "Active" : "Retired"),
+};
 
 function TechniciansTab({ branches }: { branches: Branch[] }) {
   const [name, setName] = useState("");
@@ -447,6 +536,15 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
     const res = await createClient().from("technicians").select("*").order("full_name");
     return unwrap(res) as Technician[];
   }, []);
+
+  const rosterRows = useMemo(() => {
+    if (q.status !== "ready") return null;
+    return q.data.map((t): RosterRow => ({
+      t,
+      branchName: branches.find((b) => b.id === t.branch_id)?.name ?? "—",
+    }));
+  }, [q.status, q.data, branches]);
+  const { rows, th } = useSort(rosterRows, ROSTER_ACC);
 
   async function add() {
     if (name.trim() === "") {
@@ -494,24 +592,25 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
 
       {q.status === "loading" && <SkeletonRows rows={6} cols={3} />}
       {q.status === "error" && <ErrorState message="Technicians did not load." onRetry={q.retry} />}
-      {q.status === "ready" && (
+      {rows != null && (
         <Table>
           <thead>
             <tr>
-              <Th>Name</Th>
-              <Th>Branch</Th>
-              <Th>Hired</Th>
-              <Th>Status</Th>
+              <Th {...th("name")}>Name</Th>
+              <Th {...th("branch")}>Branch</Th>
+              <Th {...th("hired")}>Hired</Th>
+              <Th {...th("status")}>Status</Th>
             </tr>
           </thead>
           <tbody>
-            {q.data.map((t) => (
+            {rows.map(({ t, branchName }) => (
               <tr key={t.id} className={t.active ? "" : "opacity-50"}>
                 <Td className="font-bold"><Truncate text={t.full_name} /></Td>
-                <Td>{branches.find((b) => b.id === t.branch_id)?.name ?? "—"}</Td>
+                <Td>{branchName}</Td>
                 <Td className="tnum">{t.hired_on ?? "—"}</Td>
                 <Td>
-                  <ToggleActive table="technicians" id={t.id} active={t.active} onChanged={q.retry} />
+                  <ToggleActive table="technicians" id={t.id} name={t.full_name}
+                    active={t.active} onChanged={q.retry} />
                 </Td>
               </tr>
             ))}
@@ -586,11 +685,19 @@ function TargetRow({ branch }: { branch: Branch }) {
 // Staff accounts
 // ---------------------------------------------------------------------------
 
+const USER_ACC: Record<string, (p: ProfileRow) => unknown> = {
+  name: (p) => p.full_name,
+  role: (p) => p.role,
+  branch: (p) => p.branch_id,
+  status: (p) => (p.active ? "Active" : "Deactivated"),
+};
+
 function UsersTab({ branches }: { branches: Branch[] }) {
   const q = useQuery(async () => {
     const res = await createClient().from("profiles").select("*").order("full_name");
     return unwrap(res) as ProfileRow[];
   }, []);
+  const { rows, th } = useSort(q.status === "ready" ? q.data : null, USER_ACC);
 
   return (
     <Card title="Staff accounts">
@@ -601,18 +708,18 @@ function UsersTab({ branches }: { branches: Branch[] }) {
       </p>
       {q.status === "loading" && <SkeletonRows rows={4} cols={4} />}
       {q.status === "error" && <ErrorState message="Accounts did not load." onRetry={q.retry} />}
-      {q.status === "ready" && (
+      {rows != null && (
         <Table>
           <thead>
             <tr>
-              <Th>Name</Th>
-              <Th>Role</Th>
-              <Th>Branch</Th>
-              <Th>Status</Th>
+              <Th {...th("name")}>Name</Th>
+              <Th {...th("role")}>Role</Th>
+              <Th {...th("branch")}>Branch</Th>
+              <Th {...th("status")}>Status</Th>
             </tr>
           </thead>
           <tbody>
-            {q.data.map((p) => (
+            {rows.map((p) => (
               <tr key={p.id} className={p.active ? "" : "opacity-50"}>
                 <Td className="font-bold"><Truncate text={p.full_name} /></Td>
                 <Td>

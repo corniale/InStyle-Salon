@@ -3,7 +3,7 @@
 // The component vocabulary (spec §4.4, §4.5, §5).
 // Two button styles. One radius. No card shadows. Skeletons match layout.
 
-import { type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes, forwardRef } from "react";
+import { type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes, forwardRef, useMemo, useState } from "react";
 import { AlertCircle } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -141,18 +141,85 @@ export function Table({ children, className = "" }: { children: ReactNode; class
 
 const alignClass = { left: "text-left", right: "text-right", center: "text-center" } as const;
 
-export function Th({ children, align = "left", className = "" }: {
+export function Th({ children, align = "left", className = "", sortDir, onSort }: {
   children?: ReactNode;
   align?: "left" | "right" | "center";
   className?: string;
+  /** Current sort direction when this column drives the sort; null otherwise. */
+  sortDir?: SortDir | null;
+  /** Makes the header clickable; wired by useSort's th() helper. */
+  onSort?: () => void;
 }) {
   return (
     <th
       className={`border-b border-border px-4 py-2 text-[11px] font-bold text-text-muted ${alignClass[align]} ${className}`}
     >
-      {children}
+      {onSort ? (
+        <button
+          type="button"
+          onClick={onSort}
+          className={`inline-flex items-center gap-1 hover:text-text-body ${
+            sortDir ? "text-text-body" : ""
+          }`}
+        >
+          {children}
+          <span aria-hidden className={sortDir ? "" : "opacity-30"}>
+            {sortDir === "asc" ? "▲" : sortDir === "desc" ? "▼" : "↕"}
+          </span>
+        </button>
+      ) : (
+        children
+      )}
     </th>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Column sorting. Pages define an accessor per sortable column (module-level
+// or memoized, so the map identity is stable) and spread th("key") onto the
+// matching <Th>. First click sorts numbers largest-first and text A-first;
+// clicking again flips. Nulls always sink to the bottom.
+// ---------------------------------------------------------------------------
+
+export type SortDir = "asc" | "desc";
+
+export function useSort<T>(
+  rows: readonly T[] | null | undefined,
+  accessors: Record<string, (row: T) => unknown>,
+) {
+  const [sort, setSort] = useState<{ key: string; dir: SortDir } | null>(null);
+
+  const sorted = useMemo(() => {
+    if (!rows) return null;
+    if (!sort || !accessors[sort.key]) return [...rows];
+    const acc = accessors[sort.key];
+    const mul = sort.dir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const va = acc(a);
+      const vb = acc(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * mul;
+      return String(va).localeCompare(String(vb), undefined, { numeric: true }) * mul;
+    });
+  }, [rows, sort, accessors]);
+
+  function th(key: string) {
+    return {
+      sortDir: sort?.key === key ? sort.dir : null,
+      onSort: () =>
+        setSort((s) => {
+          if (s?.key === key) {
+            return { key, dir: s.dir === "asc" ? ("desc" as const) : ("asc" as const) };
+          }
+          const sample = rows?.map(accessors[key]).find((v) => v != null);
+          return { key, dir: typeof sample === "number" ? "desc" : "asc" };
+        }),
+    };
+  }
+
+  return { rows: sorted, th };
 }
 
 export function Td({ children, align = "left", className = "", colSpan, title }: {

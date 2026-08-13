@@ -14,7 +14,7 @@ import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
-  SkeletonRows, Stat, Table, Td, Th, Textarea, Truncate,
+  SkeletonRows, Stat, Table, Td, Th, Textarea, Truncate, useSort,
 } from "@/components/ui";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 
@@ -313,6 +313,14 @@ function StmtRow({ label, cents, negative, bold, top }: {
 
 // ---------------------------------------------------------------------------
 
+const EXPENSE_ACC: Record<string, (e: ExpenseRow) => unknown> = {
+  date: (e) => e.spent_on,
+  category: (e) => e.category,
+  description: (e) => e.description,
+  paid: (e) => e.paid_from,
+  amount: (e) => e.amount_cents,
+};
+
 function ExpensesCard({ branchId, date, single, locked, expenses, error, onChanged }: {
   branchId: string;
   date: string;
@@ -322,6 +330,7 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
   error: boolean;
   onChanged: () => void;
 }) {
+  const { rows: sortedExpenses, th } = useSort(expenses, EXPENSE_ACC);
   const [category, setCategory] = useState("supplies");
   const [amountInput, setAmountInput] = useState("");
   const [description, setDescription] = useState("");
@@ -407,19 +416,19 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
           ? "No expenses recorded this day."
           : "No expenses recorded in this period."} />
       )}
-      {expenses != null && expenses.length > 0 && (
+      {sortedExpenses != null && sortedExpenses.length > 0 && (
         <Table>
           <thead>
             <tr>
-              {!single && <Th>Date</Th>}
-              <Th>Category</Th>
-              <Th>Description</Th>
-              <Th>Paid from</Th>
-              <Th align="right">Amount</Th>
+              {!single && <Th {...th("date")}>Date</Th>}
+              <Th {...th("category")}>Category</Th>
+              <Th {...th("description")}>Description</Th>
+              <Th {...th("paid")}>Paid from</Th>
+              <Th align="right" {...th("amount")}>Amount</Th>
             </tr>
           </thead>
           <tbody>
-            {expenses.map((e) => (
+            {sortedExpenses.map((e) => (
               <tr key={e.id}>
                 {!single && <Td className="tnum">{e.spent_on}</Td>}
                 <Td>{e.category}</Td>
@@ -432,7 +441,7 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
               <tr>
                 <Td className="font-bold" colSpan={4}>Total</Td>
                 <Td align="right" className="tnum font-bold">
-                  {formatCentavos(expenses.reduce((s, e) => s + e.amount_cents, 0))}
+                  {formatCentavos(sortedExpenses.reduce((s, e) => s + e.amount_cents, 0))}
                 </Td>
               </tr>
             )}
@@ -541,6 +550,14 @@ interface EarningsRow {
   technician_share_cents: number;
 }
 
+const EARNINGS_ACC: Record<string, (r: EarningsRow) => unknown> = {
+  technician: (r) => r.technician_name,
+  treatments: (r) => r.treatments,
+  gross: (r) => r.revenue_cents,
+  company: (r) => r.company_share_cents,
+  share: (r) => r.technician_share_cents,
+};
+
 function TechnicianEarningsCard({ branchId, from, to }: {
   branchId: string;
   from: string;
@@ -589,6 +606,8 @@ function TechnicianEarningsCard({ branchId, from, to }: {
     );
   }, [branchId, from, to]);
 
+  const { rows, th } = useSort(q.status === "ready" ? q.data : null, EARNINGS_ACC);
+
   return (
     <Card title="Earnings by technician">
       {q.status === "loading" && <SkeletonRows rows={4} cols={5} />}
@@ -598,20 +617,20 @@ function TechnicianEarningsCard({ branchId, from, to }: {
       {q.status === "ready" && q.data.length === 0 && (
         <EmptyState message="No services recorded in this period." />
       )}
-      {q.status === "ready" && q.data.length > 0 && (
+      {q.status === "ready" && rows != null && rows.length > 0 && (
         <>
           <Table>
             <thead>
               <tr>
-                <Th>Technician</Th>
-                <Th align="right">Treatments</Th>
-                <Th align="right">Gross</Th>
-                <Th align="right">Company share</Th>
-                <Th align="right">Technician share</Th>
+                <Th {...th("technician")}>Technician</Th>
+                <Th align="right" {...th("treatments")}>Treatments</Th>
+                <Th align="right" {...th("gross")}>Gross</Th>
+                <Th align="right" {...th("company")}>Company share</Th>
+                <Th align="right" {...th("share")}>Technician share</Th>
               </tr>
             </thead>
             <tbody>
-              {q.data.map((r) => (
+              {rows.map((r) => (
                 <tr key={r.technician_name}>
                   <Td className="font-bold"><Truncate text={r.technician_name} /></Td>
                   <Td align="right" className="tnum">{r.treatments}</Td>

@@ -12,7 +12,7 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import {
-  Card, EmptyState, ErrorState, SkeletonRows, Table, Td, Th, Truncate,
+  Card, EmptyState, ErrorState, SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 
@@ -100,20 +100,34 @@ export default function TechniciansPage() {
   );
 }
 
-function TechTable({ rows }: { rows: TechRow[] }) {
+const TECH_ACC: Record<string, (t: TechRow) => unknown> = {
+  technician: (t) => t.technician_name,
+  branch: (t) => t.branch_code,
+  tickets: (t) => t.tickets,
+  sales: (t) => t.revenue_cents,
+  share: (t) => t.company_share_cents,
+  margin: (t) => t.margin_vs_expected_pts,
+  retention: (t) => t.client_retention_pct,
+  rating: (t) => t.avg_rating,
+  utilisation: (t) => t.utilisation_pct,
+};
+
+function TechTable({ rows: input }: { rows: TechRow[] }) {
+  const { rows, th } = useSort(input, TECH_ACC);
+  if (rows == null) return null;
   return (
     <Table>
       <thead>
         <tr>
-          <Th>Technician</Th>
-          <Th>Branch</Th>
-          <Th align="right">Tickets</Th>
-          <Th align="right">Sales</Th>
-          <Th align="right">Company share</Th>
-          <Th align="right">Margin vs expected</Th>
-          <Th align="right">Client retention</Th>
-          <Th align="right">Rating</Th>
-          <Th align="right">Utilisation</Th>
+          <Th {...th("technician")}>Technician</Th>
+          <Th {...th("branch")}>Branch</Th>
+          <Th align="right" {...th("tickets")}>Tickets</Th>
+          <Th align="right" {...th("sales")}>Sales</Th>
+          <Th align="right" {...th("share")}>Company share</Th>
+          <Th align="right" {...th("margin")}>Margin vs expected</Th>
+          <Th align="right" {...th("retention")}>Client retention</Th>
+          <Th align="right" {...th("rating")}>Rating</Th>
+          <Th align="right" {...th("utilisation")}>Utilisation</Th>
         </tr>
       </thead>
       <tbody>
