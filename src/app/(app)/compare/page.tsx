@@ -10,8 +10,9 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import {
-  Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate, useSort,
+  Card, EmptyState, ErrorState, SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
+import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 
 const accentColor: Record<string, string> = {
   slate: "var(--color-data-slate)",
@@ -50,18 +51,10 @@ interface MatrixRow {
   list_price_cents: number | null;
 }
 
-function monthStartISO(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-function todayISO(): string {
-  return new Date().toLocaleDateString("sv-SE");
-}
-
 export default function ComparePage() {
   const { canSeeAnalytics, isOwner, businessId, business, businesses } = useSession();
-  const [from, setFrom] = useState(monthStartISO());
-  const [to, setTo] = useState(todayISO());
+  const [period, setPeriod] = useState<Period>(periodPreset("month"));
+  const { from, to } = period;
 
   if (!canSeeAnalytics) {
     return <EmptyState message="Branch comparison is available to the owner and branch managers." />;
@@ -77,13 +70,7 @@ export default function ComparePage() {
           Branch comparison
           {businesses.length > 1 && business ? ` — ${business.name}` : ""}
         </h1>
-        <div className="flex items-center gap-2">
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-            className="w-40" aria-label="From" />
-          <span className="text-[13px] text-text-muted">to</span>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-            className="w-40" aria-label="To" />
-        </div>
+        <PeriodPicker value={period} onChange={setPeriod} withRange />
       </div>
 
       {/* Scoped to one business on purpose: a spa vs a barbershop row would
