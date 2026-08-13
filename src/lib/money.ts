@@ -2,14 +2,17 @@
 // place pesos and centavos convert, and parsing never touches floating point:
 // the peso string is split on the decimal point and both halves stay integers.
 
-export function formatCentavos(cents: number | null | undefined): string {
+export function formatCentavos(
+  cents: number | null | undefined,
+  forceCentavos = false,
+): string {
   if (cents == null) return "—";
   const negative = cents < 0;
   const abs = Math.abs(cents);
   const pesos = Math.floor(abs / 100);
-  const rem = abs % 100;
+  const rem = Math.round(abs % 100);
   const body =
-    rem === 0
+    rem === 0 && !forceCentavos
       ? pesos.toLocaleString("en-PH")
       : `${pesos.toLocaleString("en-PH")}.${String(rem).padStart(2, "0")}`;
   return `${negative ? "−" : ""}₱${body}`;

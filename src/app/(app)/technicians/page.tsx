@@ -136,9 +136,9 @@ function TechTable({ rows: input }: { rows: TechRow[] }) {
             <Td className="font-bold"><Truncate text={t.technician_name} /></Td>
             <Td>{t.branch_code}</Td>
             <Td align="right" className="tnum">{formatCount(t.tickets)}</Td>
-            <Td align="right" className="tnum">{formatCentavos(t.revenue_cents)}</Td>
+            <Td align="right" className="tnum">{formatCentavos(t.revenue_cents, true)}</Td>
             <Td align="right" className="tnum">
-              {formatCentavos(t.company_share_cents)}
+              {formatCentavos(t.company_share_cents, true)}
               <span className="ml-1 text-[11px] text-text-muted">
                 {formatPct(t.actual_margin_pct, 0)}
               </span>
