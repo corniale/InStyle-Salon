@@ -188,6 +188,7 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
                 <Th key={b.id} align="right" {...th(`price:${b.id}`)}>{b.name} price</Th>
               ))}
               <Th {...th("status")}>Status</Th>
+              <Th></Th>
             </tr>
           </thead>
           <tbody>
@@ -217,7 +218,8 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
                     </Td>
                   );
                 })}
-                <Td>
+                <Td>{s.active ? "Active" : <span className="text-text-muted">Retired</span>}</Td>
+                <Td align="right">
                   <ToggleActive
                     table="services" id={s.id} name={s.name} active={s.active} onChanged={q.retry}
                   />
@@ -464,7 +466,8 @@ function RateModal({ service, onClose, onDone }: {
   );
 }
 
-// A confirm modal guards the flip — a stray click must not silently retire
+// The action lives in its own column, away from the Status text, and a
+// confirm modal guards the flip — a stray click must not silently retire
 // or restore anything.
 function ToggleActive({ table, id, name, active, onChanged }: {
   table: "services" | "technicians";
@@ -490,7 +493,7 @@ function ToggleActive({ table, id, name, active, onChanged }: {
         className="text-[11px] hover:underline"
         onClick={() => setConfirming(true)}
       >
-        {active ? "Active — retire" : "Retired — restore"}
+        {active ? "Retire" : "Restore"}
       </button>
       <Modal
         title={active ? `Retire ${name}?` : `Restore ${name}?`}
@@ -600,6 +603,7 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
               <Th {...th("branch")}>Branch</Th>
               <Th {...th("hired")}>Hired</Th>
               <Th {...th("status")}>Status</Th>
+              <Th></Th>
             </tr>
           </thead>
           <tbody>
@@ -608,7 +612,8 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
                 <Td className="font-bold"><Truncate text={t.full_name} /></Td>
                 <Td>{branchName}</Td>
                 <Td className="tnum">{t.hired_on ?? "—"}</Td>
-                <Td>
+                <Td>{t.active ? "Active" : <span className="text-text-muted">Retired</span>}</Td>
+                <Td align="right">
                   <ToggleActive table="technicians" id={t.id} name={t.full_name}
                     active={t.active} onChanged={q.retry} />
                 </Td>
@@ -716,6 +721,7 @@ function UsersTab({ branches }: { branches: Branch[] }) {
               <Th {...th("role")}>Role</Th>
               <Th {...th("branch")}>Branch</Th>
               <Th {...th("status")}>Status</Th>
+              <Th></Th>
             </tr>
           </thead>
           <tbody>
@@ -732,7 +738,8 @@ function UsersTab({ branches }: { branches: Branch[] }) {
                     <BranchSelect profile={p} branches={branches} onChanged={q.retry} />
                   )}
                 </Td>
-                <Td>
+                <Td>{p.active ? "Active" : <span className="text-text-muted">Deactivated</span>}</Td>
+                <Td align="right">
                   <ProfileToggle profile={p} onChanged={q.retry} />
                 </Td>
               </tr>
@@ -808,20 +815,45 @@ function BranchSelect({ profile, branches, onChanged }: {
 }
 
 function ProfileToggle({ profile, onChanged }: { profile: ProfileRow; onChanged: () => void }) {
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  async function apply() {
+    setBusy(true);
+    await createClient().from("profiles").update({ active: !profile.active }).eq("id", profile.id);
+    setBusy(false);
+    setConfirming(false);
+    onChanged();
+  }
+
   return (
-    <button
-      className="text-[11px] hover:underline disabled:opacity-50"
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        await createClient().from("profiles").update({ active: !profile.active }).eq("id", profile.id);
-        setBusy(false);
-        onChanged();
-      }}
-    >
-      {profile.active ? "Active — deactivate" : "Deactivated — restore"}
-    </button>
+    <>
+      <button
+        className="text-[11px] hover:underline"
+        onClick={() => setConfirming(true)}
+      >
+        {profile.active ? "Deactivate" : "Restore"}
+      </button>
+      <Modal
+        title={profile.active
+          ? `Deactivate ${profile.full_name}?`
+          : `Restore ${profile.full_name}?`}
+        open={confirming}
+        onClose={() => setConfirming(false)}
+      >
+        <p className="mb-4 text-[13px] text-text-muted">
+          {profile.active
+            ? "A deactivated account is locked out immediately. Its history stays."
+            : "Restoring lets this account sign in again with its old role and branch."}
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button onClick={() => setConfirming(false)}>Cancel</Button>
+          <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void apply()}>
+            {profile.active ? "Deactivate" : "Restore"}
+          </Button>
+        </div>
+      </Modal>
+    </>
   );
 }
 
