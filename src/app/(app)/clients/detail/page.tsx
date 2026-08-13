@@ -57,10 +57,21 @@ export default function ClientDetailPage() {
 }
 
 function ClientDetail() {
-  const id = useSearchParams().get("id") ?? "";
+  const sp = useSearchParams();
+  const id = sp.get("id") ?? "";
   const router = useRouter();
   const { isManagerUp, canSeeAnalytics, branches } = useSession();
   const [mergeOpen, setMergeOpen] = useState(false);
+
+  // The list's position rides along in the URL, so back (and the redirect
+  // after a merge) returns to the exact page of the client list.
+  const listParams = new URLSearchParams();
+  const listQ = sp.get("q");
+  const listPage = sp.get("page");
+  if (listQ) listParams.set("q", listQ);
+  if (listPage) listParams.set("page", listPage);
+  const listQS = listParams.toString();
+  const backHref = listQS ? `/clients?${listQS}` : "/clients";
 
   const q = useQuery(async () => {
     const supabase = createClient();
@@ -114,7 +125,7 @@ function ClientDetail() {
         <EmptyState
           message="This record was merged into another client."
           action={
-            <Link href={`/clients/detail?id=${client.merged_into_id}`}>
+            <Link href={`/clients/detail?id=${client.merged_into_id}${listQS ? `&${listQS}` : ""}`}>
               <Button variant="primary">Open the surviving record</Button>
             </Link>
           }
@@ -125,6 +136,10 @@ function ClientDetail() {
 
   return (
     <div className="space-y-6">
+      <Link href={backHref} className="inline-block text-[13px] text-text-muted hover:text-text-body hover:underline">
+        ← Back to client list
+      </Link>
+
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-[20px] font-bold">
@@ -198,7 +213,8 @@ function ClientDetail() {
         open={mergeOpen}
         loser={client}
         onClose={() => setMergeOpen(false)}
-        onDone={(winnerId) => router.push(`/clients/detail?id=${winnerId}`)}
+        onDone={(winnerId) =>
+          router.push(`/clients/detail?id=${winnerId}${listQS ? `&${listQS}` : ""}`)}
       />
     </div>
   );

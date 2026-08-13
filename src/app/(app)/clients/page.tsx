@@ -2,10 +2,13 @@
 
 // Client database (spec §2). Paginated — the list exceeds 50 rows
 // (edge case 31) — searchable by name or phone, with lapsed status from
-// v_client_retention where the caller can see analytics.
+// v_client_retention where the caller can see analytics. Page and search
+// live in the URL so a detail visit (or a merge) can come straight back
+// to the same spot in the list.
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -44,9 +47,37 @@ const CLIENT_ACC: Record<string, (c: ClientListRow) => unknown> = {
 };
 
 export default function ClientsPage() {
+  return (
+    <Suspense>
+      <ClientsList />
+    </Suspense>
+  );
+}
+
+function ClientsList() {
   const { canSeeAnalytics } = useSession();
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0);
+  const router = useRouter();
+  const sp = useSearchParams();
+
+  // URL is the source of truth ("page" is 1-based there); the input keeps
+  // local state so typing never fights the router.
+  const urlQ = sp.get("q") ?? "";
+  const page = Math.max(0, (Number(sp.get("page")) || 1) - 1);
+  const [search, setSearch] = useState(urlQ);
+  useEffect(() => { setSearch(urlQ); }, [urlQ]);
+
+  const listParams = new URLSearchParams();
+  if (urlQ.trim() !== "") listParams.set("q", urlQ);
+  if (page > 0) listParams.set("page", String(page + 1));
+  const listQS = listParams.toString();
+
+  function syncUrl(nextQ: string, nextPage: number) {
+    const params = new URLSearchParams();
+    if (nextQ.trim() !== "") params.set("q", nextQ);
+    if (nextPage > 0) params.set("page", String(nextPage + 1));
+    router.replace(params.toString() ? `/clients?${params.toString()}` : "/clients",
+      { scroll: false });
+  }
 
   const q = useQuery(async () => {
     const supabase = createClient();
@@ -91,7 +122,7 @@ export default function ClientsPage() {
         <Input
           placeholder="Search name or phone"
           value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+          onChange={(e) => { setSearch(e.target.value); syncUrl(e.target.value, 0); }}
           className="w-64"
           aria-label="Search clients"
         />
@@ -141,7 +172,10 @@ export default function ClientsPage() {
                   return (
                     <tr key={c.id}>
                       <Td>
-                        <Link href={`/clients/detail?id=${c.id}`} className="font-bold hover:underline">
+                        <Link
+                          href={`/clients/detail?id=${c.id}${listQS ? `&${listQS}` : ""}`}
+                          className="font-bold hover:underline"
+                        >
                           <Truncate text={c.full_name ?? (c.phone_declined ? "Walk-in" : c.phone)} />
                         </Link>
                       </Td>
@@ -161,7 +195,8 @@ export default function ClientsPage() {
                 })}
               </tbody>
             </Table>
-            <Pagination page={page} total={q.data.total} onPage={setPage} noun="clients" />
+            <Pagination page={page} total={q.data.total}
+              onPage={(p) => syncUrl(search, p)} noun="clients" />
           </>
         )}
       </Card>
