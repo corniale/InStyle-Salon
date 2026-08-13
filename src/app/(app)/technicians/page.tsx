@@ -12,8 +12,9 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import {
-  Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate,
+  Card, EmptyState, ErrorState, SkeletonRows, Table, Td, Th, Truncate,
 } from "@/components/ui";
+import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 
 interface TechRow {
   technician_id: string;
@@ -38,18 +39,10 @@ interface TechRow {
   ranked: boolean;
 }
 
-function monthStartISO(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-function todayISO(): string {
-  return new Date().toLocaleDateString("sv-SE");
-}
-
 export default function TechniciansPage() {
   const { branchId, canSeeAnalytics } = useSession();
-  const [from, setFrom] = useState(monthStartISO());
-  const [to, setTo] = useState(todayISO());
+  const [period, setPeriod] = useState<Period>(periodPreset("month"));
+  const { from, to } = period;
 
   const q = useQuery(async () => {
     const res = await createClient().rpc("f_technician_ranking", {
@@ -69,13 +62,7 @@ export default function TechniciansPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Technicians</h1>
-        <div className="flex items-center gap-2">
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-            className="w-40" aria-label="From" />
-          <span className="text-[13px] text-text-muted">to</span>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-            className="w-40" aria-label="To" />
-        </div>
+        <PeriodPicker value={period} onChange={setPeriod} withRange />
       </div>
 
       <Card title="Ranking">

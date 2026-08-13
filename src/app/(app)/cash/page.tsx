@@ -16,6 +16,7 @@ import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
   SkeletonRows, Stat, Table, Td, Th, Textarea, Truncate,
 } from "@/components/ui";
+import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 
 interface DailyCashRow {
   branch_id: string;
@@ -49,25 +50,22 @@ interface ExpenseRow {
   paid_from: string;
 }
 
-function todayISO(): string {
-  return new Date().toLocaleDateString("sv-SE");
-}
-
 export default function CashPage() {
   const { branchId, branches } = useSession();
-  const [date, setDate] = useState(todayISO());
+  const [period, setPeriod] = useState<Period>(periodPreset("today"));
 
-  // The header's branch switcher is the only filter. "All" shows each
+  // The header's branch switcher is the only branch filter. "All" shows each
   // branch's drawer as its own section — two physical drawers cannot be
-  // reconciled as one.
+  // reconciled as one. A multi-day period totals the statement; closing a
+  // drawer stays a single-day act.
   const shown = branchId ? branches.filter((b) => b.id === branchId) : branches;
+  const single = period.from === period.to;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Daily cash</h1>
-        <Input type="date" value={date} max={todayISO()}
-          onChange={(e) => setDate(e.target.value)} className="w-40" aria-label="Date" />
+        <PeriodPicker value={period} onChange={setPeriod} />
       </div>
 
       {shown.length === 0 && (
@@ -79,7 +77,9 @@ export default function CashPage() {
           branchId={b.id}
           branchName={b.name}
           showName={shown.length > 1}
-          date={date}
+          from={period.from}
+          to={period.to}
+          single={single}
         />
       ))}
     </div>
@@ -88,11 +88,40 @@ export default function CashPage() {
 
 // ---------------------------------------------------------------------------
 
-function BranchCashSection({ branchId, branchName, showName, date }: {
+/** Sum the statement fields of several days into one synthetic row. */
+function aggregateDays(rows: DailyCashRow[]): DailyCashRow | null {
+  if (rows.length === 0) return null;
+  const sum = (f: (r: DailyCashRow) => number) => rows.reduce((s, r) => s + f(r), 0);
+  return {
+    ...rows[0],
+    opening_float_cents: sum((r) => r.opening_float_cents),
+    cash_takings_cents: sum((r) => r.cash_takings_cents),
+    non_cash_takings_cents: sum((r) => r.non_cash_takings_cents),
+    cash_expenses_cents: sum((r) => r.cash_expenses_cents),
+    expenses_cents: sum((r) => r.expenses_cents),
+    expected_cash_cents: sum((r) => r.expected_cash_cents),
+    counted_cash_cents: null,
+    variance_cents: null,
+    closed_at: null,
+    note: null,
+    gross_sales_cents: sum((r) => r.gross_sales_cents),
+    technician_share_cents: sum((r) => r.technician_share_cents),
+    company_share_cents: sum((r) => r.company_share_cents),
+    discounts_cents: sum((r) => r.discounts_cents),
+    gcash_takings_cents: sum((r) => r.gcash_takings_cents),
+    maya_takings_cents: sum((r) => r.maya_takings_cents),
+    bank_card_takings_cents: sum((r) => r.bank_card_takings_cents),
+    package_comp_cents: sum((r) => r.package_comp_cents),
+  };
+}
+
+function BranchCashSection({ branchId, branchName, showName, from, to, single }: {
   branchId: string;
   branchName: string;
   showName: boolean;
-  date: string;
+  from: string;
+  to: string;
+  single: boolean;
 }) {
   const { isManagerUp } = useSession();
   const [closeOpen, setCloseOpen] = useState(false);
@@ -100,36 +129,40 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
 
   const q = useQuery(async () => {
     const supabase = createClient();
-    const [day, expenses] = await Promise.all([
+    const [days, expenses] = await Promise.all([
       supabase
         .from("v_daily_cash")
         .select("*")
         .eq("branch_id", branchId)
-        .eq("business_date", date)
-        .maybeSingle(),
+        .gte("business_date", from)
+        .lte("business_date", to)
+        .order("business_date", { ascending: true }),
       supabase
         .from("expenses")
         .select("id, spent_on, category, amount_cents, description, paid_from")
         .eq("branch_id", branchId)
-        .eq("spent_on", date)
+        .gte("spent_on", from)
+        .lte("spent_on", to)
+        .order("spent_on", { ascending: false })
         .order("created_at", { ascending: false }),
     ]);
-    if (day.error) throw new Error(day.error.message);
+    const rows = unwrap(days) as DailyCashRow[];
     return {
-      day: (day.data ?? null) as DailyCashRow | null,
+      day: single ? (rows[0] ?? null) : aggregateDays(rows),
+      dayCount: rows.length,
       expenses: unwrap(expenses) as ExpenseRow[],
     };
-  }, [branchId, date]);
+  }, [branchId, from, to, single]);
 
   async function reopen() {
     setReopenBusy(true);
-    await createClient().rpc("reopen_cash_day", { p_branch: branchId, p_date: date });
+    await createClient().rpc("reopen_cash_day", { p_branch: branchId, p_date: from });
     setReopenBusy(false);
     q.retry();
   }
 
   const day = q.status === "ready" ? q.data.day : null;
-  const closed = day?.closed_at != null;
+  const closed = single && day?.closed_at != null;
 
   return (
     <div className="space-y-6">
@@ -146,21 +179,26 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
               <Stat label="Gross sales" value={formatCentavos(day?.gross_sales_cents ?? 0)} />
               <Stat label="Company share" value={formatCentavos(day?.company_share_cents ?? 0)} />
               <Stat label="Net cash to remit" value={formatCentavos(day?.expected_cash_cents ?? 0)} hero />
-              <Stat
-                label={closed ? "Variance at close" : "Counted"}
-                value={
-                  day?.counted_cash_cents != null
-                    ? closed
-                      ? formatCentavos(day.variance_cents)
-                      : formatCentavos(day.counted_cash_cents)
-                    : "—"
-                }
-                tone={
-                  closed && day?.variance_cents != null && day.variance_cents !== 0
-                    ? "negative"
-                    : closed ? "positive" : undefined
-                }
-              />
+              {single ? (
+                <Stat
+                  label={closed ? "Variance at close" : "Counted"}
+                  value={
+                    day?.counted_cash_cents != null
+                      ? closed
+                        ? formatCentavos(day.variance_cents)
+                        : formatCentavos(day.counted_cash_cents)
+                      : "—"
+                  }
+                  tone={
+                    closed && day?.variance_cents != null && day.variance_cents !== 0
+                      ? "negative"
+                      : closed ? "positive" : undefined
+                  }
+                />
+              ) : (
+                <Stat label="Days with activity"
+                  value={String(q.status === "ready" ? q.data.dayCount : 0)} />
+              )}
             </div>
 
             <div className="mt-4 max-w-md space-y-1 text-[13px]">
@@ -190,7 +228,13 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
 
             <div className="mt-4 flex items-center justify-between">
               <div className="text-[11px] text-text-muted">
-                {closed ? (
+                {!single ? (
+                  <>
+                    Totals across the period. Pick a single date to count and close a drawer.
+                    {(day?.discounts_cents ?? 0) > 0 &&
+                      ` Discounts given: ${formatCentavos(day?.discounts_cents ?? 0)} (already off gross).`}
+                  </>
+                ) : closed ? (
                   <>
                     Day closed{day?.note ? ` — note: ${day.note}` : ""}. Tickets and expenses for
                     this day are locked.
@@ -204,7 +248,7 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
                   </>
                 )}
               </div>
-              {closed ? (
+              {single && (closed ? (
                 isManagerUp && (
                   <Button busy={reopenBusy} busyLabel="Reopening" onClick={() => void reopen()}>
                     Reopen day
@@ -214,17 +258,18 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
                 <Button variant="primary" onClick={() => setCloseOpen(true)}>
                   Close the day
                 </Button>
-              )}
+              ))}
             </div>
           </>
         )}
       </Card>
 
-      <TechnicianEarningsCard branchId={branchId} date={date} />
+      <TechnicianEarningsCard branchId={branchId} from={from} to={to} />
 
       <ExpensesCard
         branchId={branchId}
-        date={date}
+        date={from}
+        single={single}
         locked={closed}
         expenses={q.status === "ready" ? q.data.expenses : null}
         error={q.status === "error"}
@@ -234,7 +279,7 @@ function BranchCashSection({ branchId, branchName, showName, date }: {
       <CloseModal
         open={closeOpen}
         branchId={branchId}
-        date={date}
+        date={from}
         expected={day?.expected_cash_cents ?? 0}
         onClose={() => setCloseOpen(false)}
         onDone={() => { setCloseOpen(false); q.retry(); }}
@@ -268,9 +313,10 @@ function StmtRow({ label, cents, negative, bold, top }: {
 
 // ---------------------------------------------------------------------------
 
-function ExpensesCard({ branchId, date, locked, expenses, error, onChanged }: {
+function ExpensesCard({ branchId, date, single, locked, expenses, error, onChanged }: {
   branchId: string;
   date: string;
+  single: boolean;
   locked: boolean;
   expenses: ExpenseRow[] | null;
   error: boolean;
@@ -318,7 +364,7 @@ function ExpensesCard({ branchId, date, locked, expenses, error, onChanged }: {
 
   return (
     <Card title="Petty cash expenses">
-      {!locked && (
+      {single && !locked && (
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <Field label="Category">
             <Select value={category} onChange={(e) => setCategory(e.target.value)} className="w-44">
@@ -357,12 +403,15 @@ function ExpensesCard({ branchId, date, locked, expenses, error, onChanged }: {
       {error && <ErrorState message="Expenses did not load." />}
       {expenses == null && !error && <SkeletonRows rows={3} cols={4} />}
       {expenses != null && expenses.length === 0 && (
-        <EmptyState message="No expenses recorded this day." />
+        <EmptyState message={single
+          ? "No expenses recorded this day."
+          : "No expenses recorded in this period."} />
       )}
       {expenses != null && expenses.length > 0 && (
         <Table>
           <thead>
             <tr>
+              {!single && <Th>Date</Th>}
               <Th>Category</Th>
               <Th>Description</Th>
               <Th>Paid from</Th>
@@ -372,12 +421,21 @@ function ExpensesCard({ branchId, date, locked, expenses, error, onChanged }: {
           <tbody>
             {expenses.map((e) => (
               <tr key={e.id}>
+                {!single && <Td className="tnum">{e.spent_on}</Td>}
                 <Td>{e.category}</Td>
                 <Td><Truncate text={e.description ?? "—"} max={48} /></Td>
                 <Td>{e.paid_from}</Td>
                 <Td align="right" className="tnum">{formatCentavos(e.amount_cents)}</Td>
               </tr>
             ))}
+            {!single && (
+              <tr>
+                <Td className="font-bold" colSpan={4}>Total</Td>
+                <Td align="right" className="tnum font-bold">
+                  {formatCentavos(expenses.reduce((s, e) => s + e.amount_cents, 0))}
+                </Td>
+              </tr>
+            )}
           </tbody>
         </Table>
       )}
@@ -483,20 +541,35 @@ interface EarningsRow {
   technician_share_cents: number;
 }
 
-function TechnicianEarningsCard({ branchId, date }: { branchId: string; date: string }) {
+function TechnicianEarningsCard({ branchId, from, to }: {
+  branchId: string;
+  from: string;
+  to: string;
+}) {
   const q = useQuery(async () => {
-    const res = await createClient()
-      .from("v_ticket_lines_active")
-      .select("technician_name, qty, total_cents, company_share_cents, technician_share_cents")
-      .eq("branch_id", branchId)
-      .eq("ticket_date", date);
-    const lines = unwrap(res) as Array<{
+    // A year of lines exceeds the 1,000-row response cap, so page through.
+    const supabase = createClient();
+    const PAGE = 1000;
+    const lines: Array<{
       technician_name: string;
       qty: number;
       total_cents: number;
       company_share_cents: number;
       technician_share_cents: number;
-    }>;
+    }> = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const res = await supabase
+        .from("v_ticket_lines_active")
+        .select("line_id, technician_name, qty, total_cents, company_share_cents, technician_share_cents")
+        .eq("branch_id", branchId)
+        .gte("ticket_date", from)
+        .lte("ticket_date", to)
+        .order("line_id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      const chunk = unwrap(res) as typeof lines;
+      lines.push(...chunk);
+      if (chunk.length < PAGE) break;
+    }
     const byTech = new Map<string, EarningsRow>();
     for (const l of lines) {
       const row = byTech.get(l.technician_name) ?? {
@@ -514,7 +587,7 @@ function TechnicianEarningsCard({ branchId, date }: { branchId: string; date: st
     return [...byTech.values()].sort(
       (a, b) => b.technician_share_cents - a.technician_share_cents,
     );
-  }, [branchId, date]);
+  }, [branchId, from, to]);
 
   return (
     <Card title="Earnings by technician">
@@ -523,7 +596,7 @@ function TechnicianEarningsCard({ branchId, date }: { branchId: string; date: st
         <ErrorState message="Technician earnings did not load." onRetry={q.retry} />
       )}
       {q.status === "ready" && q.data.length === 0 && (
-        <EmptyState message="No services recorded this day." />
+        <EmptyState message="No services recorded in this period." />
       )}
       {q.status === "ready" && q.data.length > 0 && (
         <>

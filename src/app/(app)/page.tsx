@@ -14,96 +14,44 @@ import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import { Card, ErrorState, SkeletonRows, SkeletonStat, Stat } from "@/components/ui";
 import { BarList, LineChart } from "@/components/charts";
-
-function monthStartISO(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-function todayISO(): string {
-  return new Date().toLocaleDateString("sv-SE");
-}
-
-type Range = "today" | "month" | string; // string = a past month, "2026-07"
-
-const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** The 12 months before the current one, newest first: [["2026-07", "Jul 2026"], …] */
-function pastMonths(): Array<[string, string]> {
-  const out: Array<[string, string]> = [];
-  const d = new Date();
-  for (let i = 1; i <= 12; i++) {
-    const m = new Date(d.getFullYear(), d.getMonth() - i, 1);
-    out.push([
-      `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}`,
-      `${MONTH_LABELS[m.getMonth()]} ${m.getFullYear()}`,
-    ]);
-  }
-  return out;
-}
-
-function monthEndISO(ym: string): string {
-  const [y, m] = ym.split("-").map(Number);
-  return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
-}
+import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 
 export default function DashboardPage() {
   const { branchId, canSeeAnalytics } = useSession();
   const router = useRouter();
-  const [range, setRange] = useState<Range>("today");
+  const [period, setPeriod] = useState<Period>(periodPreset("today"));
 
   // Front desk has no analytics (spec §3); their home is the ticket list.
   useEffect(() => {
     if (!canSeeAnalytics) router.replace("/tickets");
   }, [canSeeAnalytics, router]);
 
-  const isPastMonth = range !== "today" && range !== "month";
-  const from =
-    range === "today" ? todayISO()
-    : range === "month" ? monthStartISO()
-    : `${range}-01`;
-  const to = isPastMonth ? monthEndISO(range) : todayISO();
-
   if (!canSeeAnalytics) return null;
+
+  const { kind, from, to } = period;
+  // Pace against a monthly target only makes sense for a month: current
+  // (today / this month) or a past one. Year-to-date and single past days
+  // have no month-shaped target to pace against.
+  const showPace = kind === "today" || kind === "month" || kind === "pastmonth";
+  // The trend tile defaults to the last 30 days; a past month or the year
+  // to date pins it to that window instead.
+  const trendRange = kind === "pastmonth" || kind === "ytd";
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Dashboard</h1>
-        <div className="flex rounded-[4px] border border-border">
-          {(["today", "month"] as const).map((r) => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              className={`h-8 px-4 text-[13px] ${
-                range === r ? "bg-ink font-bold text-white" : "hover:bg-surface-page"
-              }`}
-            >
-              {r === "today" ? "Today" : "This month"}
-            </button>
-          ))}
-          <select
-            aria-label="Past month"
-            value={isPastMonth ? range : ""}
-            onChange={(e) => { if (e.target.value) setRange(e.target.value); }}
-            className={`h-8 border-l border-border px-2 text-[13px] outline-none ${
-              isPastMonth ? "bg-ink font-bold text-white" : "bg-surface-card text-text-body"
-            }`}
-          >
-            <option value="">Past month…</option>
-            {pastMonths().map(([ym, label]) => (
-              <option key={ym} value={ym}>{label}</option>
-            ))}
-          </select>
-        </div>
+        <PeriodPicker value={period} onChange={setPeriod} withPastMonths />
       </div>
 
       <SummaryTiles branchId={branchId} from={from} to={to} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <PaceTile branchId={branchId} month={isPastMonth ? `${range}-01` : null} />
+        {showPace && (
+          <PaceTile branchId={branchId} month={kind === "pastmonth" ? from : null} />
+        )}
         <SalesTrendTile branchId={branchId}
-          from={isPastMonth ? from : null} to={isPastMonth ? to : null} />
+          from={trendRange ? from : null} to={trendRange ? to : null} />
         <ServiceTile branchId={branchId} from={from} to={to} />
         <PaymentMixTile branchId={branchId} from={from} to={to} />
         <RetentionTile branchId={branchId} />
