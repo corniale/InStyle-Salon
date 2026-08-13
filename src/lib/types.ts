@@ -65,6 +65,8 @@ export interface Technician {
   full_name: string;
   active: boolean;
   hired_on: string | null;
+  specialty: string | null;
+  skill_level: "trainee" | "junior" | "senior" | "master" | null;
 }
 
 export interface Client {

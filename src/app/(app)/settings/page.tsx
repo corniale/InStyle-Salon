@@ -6,6 +6,7 @@
 // never rewritten (edge case 17).
 
 import { useMemo, useState } from "react";
+import { Archive, ArchiveRestore, UserCheck, UserX } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -74,13 +75,14 @@ const SERVICE_ACC: Record<string, (r: SvcRow) => unknown> = {
   service: (r) => r.s.name,
   type: (r) => r.typeName,
   share: (r) => Number(r.s.default_sharing_rate),
+  duration: (r) => r.s.default_duration_min,
   status: (r) => (r.s.active ? "Active" : "Retired"),
 };
 
 function ServicesTab({ branches }: { branches: Branch[] }) {
   const { businessId } = useSession();
   const [editing, setEditing] = useState<{ service: Service; branch: Branch; current: number | null } | null>(null);
-  const [rateEditing, setRateEditing] = useState<Service | null>(null);
+  const [serviceEditing, setServiceEditing] = useState<Service | null>(null);
   const [typeFilter, setTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"" | "active" | "retired">("");
 
@@ -144,8 +146,9 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
   return (
     <Card title="Services and prices">
       <p className="mb-4 text-[11px] text-text-muted">
-        Changing a price adds a new row effective today — past tickets keep the price they were
-        sold at. The sharing rate shown is the company&apos;s side.
+        Click a service name to edit it; click a price to change that branch&apos;s price. A price
+        change adds a new row effective today — past tickets keep the price they were sold at.
+        The sharing rate shown is the company&apos;s side.
       </p>
 
       <div className="mb-4 flex flex-wrap items-end justify-between gap-4 border-b border-border pb-4">
@@ -184,23 +187,29 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
               <Th {...th("service")}>Service</Th>
               <Th {...th("type")}>Type</Th>
               <Th align="right" {...th("share")}>Company share</Th>
+              <Th align="right" {...th("duration")}>Duration</Th>
               {branches.map((b) => (
                 <Th key={b.id} align="right" {...th(`price:${b.id}`)}>{b.name} price</Th>
               ))}
               <Th {...th("status")}>Status</Th>
-              <Th></Th>
+              <Th align="right">Status toggle</Th>
             </tr>
           </thead>
           <tbody>
             {rows.map(({ s, typeName }) => (
               <tr key={s.id} className={s.active ? "" : "opacity-50"}>
-                <Td><Truncate text={s.name} /></Td>
+                <Td>
+                  <button className="font-bold hover:underline" onClick={() => setServiceEditing(s)}>
+                    <Truncate text={s.name} />
+                  </button>
+                </Td>
                 <Td className="text-text-muted">{typeName}</Td>
                 <Td align="right" className="tnum">
-                  <button className="hover:underline" onClick={() => setRateEditing(s)}>
+                  <button className="hover:underline" onClick={() => setServiceEditing(s)}>
                     {(Number(s.default_sharing_rate) * 100).toFixed(0)}%
                   </button>
                 </Td>
+                <Td align="right" className="tnum">{s.default_duration_min} min</Td>
                 {branches.map((b) => {
                   const p = data?.priceMap.get(`${b.id}:${s.id}`);
                   return (
@@ -235,10 +244,11 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
         onClose={() => setEditing(null)}
         onDone={() => { setEditing(null); q.retry(); }}
       />
-      <RateModal
-        service={rateEditing}
-        onClose={() => setRateEditing(null)}
-        onDone={() => { setRateEditing(null); q.retry(); }}
+      <EditServiceModal
+        service={serviceEditing}
+        types={data?.types ?? []}
+        onClose={() => setServiceEditing(null)}
+        onDone={() => { setServiceEditing(null); q.retry(); }}
       />
     </Card>
   );
@@ -415,47 +425,91 @@ function PriceModal({ editing, onClose, onDone }: {
   );
 }
 
-function RateModal({ service, onClose, onDone }: {
+// Name, type, company share and duration in one place. Renaming applies
+// everywhere — past reports show the new name because it is the same
+// service. Share and duration touch new tickets only; prices are edited
+// per branch in the table, and history is never rewritten.
+function EditServiceModal({ service, types, onClose, onDone }: {
   service: Service | null;
+  types: ServiceType[];
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [input, setInput] = useState("");
+  const [name, setName] = useState("");
+  const [typeId, setTypeId] = useState("");
+  const [ratePct, setRatePct] = useState("");
+  const [duration, setDuration] = useState("");
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  if (service && loadedFor !== service.id) {
+    setName(service.name);
+    setTypeId(service.service_type_id);
+    setRatePct((Number(service.default_sharing_rate) * 100).toFixed(0));
+    setDuration(String(service.default_duration_min));
+    setLoadedFor(service.id);
+    setError(null);
+  }
+
   async function save() {
     if (!service) return;
-    const pct = Number(input);
+    const pct = Number(ratePct);
+    const mins = Number(duration);
+    if (name.trim() === "") { setError("The service needs a name."); return; }
     if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-      setError("Enter the company share as a percentage, 0 to 100.");
-      return;
+      setError("Company share must be 0 to 100."); return;
+    }
+    if (!Number.isFinite(mins) || mins <= 0) {
+      setError("Duration must be a positive number of minutes."); return;
     }
     setBusy(true);
     setError(null);
     const { error } = await createClient()
       .from("services")
-      .update({ default_sharing_rate: (pct / 100).toFixed(3) })
+      .update({
+        name: name.trim(),
+        service_type_id: typeId,
+        default_sharing_rate: (pct / 100).toFixed(3),
+        default_duration_min: mins,
+      })
       .eq("id", service.id);
     setBusy(false);
     if (error) {
-      setError("The rate was not saved. Try again.");
+      setError(/unique/i.test(error.message)
+        ? "Another service under this type already has that name."
+        : "The service was not saved. Try again.");
       return;
     }
-    setInput("");
     onDone();
   }
 
   return (
-    <Modal title={service ? `Sharing rate — ${service.name}` : ""} open={service != null} onClose={onClose}>
+    <Modal title={service ? `Edit ${service.name}` : ""} open={service != null} onClose={onClose}>
       <p className="mb-4 text-[13px] text-text-muted">
-        Current company share: {service ? (Number(service.default_sharing_rate) * 100).toFixed(0) : ""}%.
-        Applies to new tickets only; past lines keep the rate they were sold at. The change is audited.
+        Renaming applies everywhere, including past reports — it is the same service. The share
+        and duration apply to new tickets only; past lines keep what they were sold at. Prices
+        are edited per branch, straight from the table.
       </p>
-      <Field label="Company share (%)" error={error ?? undefined}>
-        <Input inputMode="numeric" value={input} autoFocus invalid={!!error}
-          onChange={(e) => setInput(e.target.value)} />
-      </Field>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Service name" error={error ?? undefined}>
+          <Input value={name} autoFocus invalid={!!error}
+            onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Type">
+          <Select value={typeId} onChange={(e) => setTypeId(e.target.value)}>
+            {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </Select>
+        </Field>
+        <Field label="Company share (%)">
+          <Input inputMode="numeric" value={ratePct}
+            onChange={(e) => setRatePct(e.target.value)} />
+        </Field>
+        <Field label="Duration (min)">
+          <Input inputMode="numeric" value={duration}
+            onChange={(e) => setDuration(e.target.value)} />
+        </Field>
+      </div>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void save()}>
@@ -490,9 +544,12 @@ function ToggleActive({ table, id, name, active, onChanged }: {
   return (
     <>
       <button
-        className="text-[11px] hover:underline"
+        className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-text-body hover:underline"
+        title={active ? `Retire ${name}` : `Restore ${name}`}
+        aria-label={active ? `Retire ${name}` : `Restore ${name}`}
         onClick={() => setConfirming(true)}
       >
+        {active ? <Archive size={14} /> : <ArchiveRestore size={14} />}
         {active ? "Retire" : "Restore"}
       </button>
       <Modal
@@ -522,18 +579,26 @@ function ToggleActive({ table, id, name, active, onChanged }: {
 
 interface RosterRow { t: Technician; branchName: string }
 
+const SKILL_LABEL: Record<string, string> = {
+  trainee: "Trainee", junior: "Junior", senior: "Senior", master: "Master",
+};
+
+const SPECIALTY_SUGGESTIONS = [
+  "Hairdresser", "Barber", "Nail technician", "Lash technician",
+  "Brow technician", "Massage therapist", "Aesthetician",
+];
+
 const ROSTER_ACC: Record<string, (r: RosterRow) => unknown> = {
   name: (r) => r.t.full_name,
   branch: (r) => r.branchName,
+  specialty: (r) => r.t.specialty,
+  skill: (r) => r.t.skill_level,
   hired: (r) => r.t.hired_on,
   status: (r) => (r.t.active ? "Active" : "Retired"),
 };
 
 function TechniciansTab({ branches }: { branches: Branch[] }) {
-  const [name, setName] = useState("");
-  const [branchId, setBranchId] = useState(branches[0]?.id ?? "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
 
   const q = useQuery(async () => {
     const res = await createClient().from("technicians").select("*").order("full_name");
@@ -549,48 +614,14 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
   }, [q.status, q.data, branches]);
   const { rows, th } = useSort(rosterRows, ROSTER_ACC);
 
-  async function add() {
-    if (name.trim() === "") {
-      setError("Enter the technician's name.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    const { error } = await createClient().from("technicians").insert({
-      full_name: name.trim(),
-      branch_id: branchId,
-      hired_on: new Date().toLocaleDateString("sv-SE"),
-    });
-    setBusy(false);
-    if (error) {
-      setError("Not saved. Try again.");
-      return;
-    }
-    setName("");
-    q.retry();
-  }
-
   return (
     <Card title="Technicians">
-      <p className="mb-4 text-[11px] text-text-muted">
-        Retiring a technician removes them from new-ticket pickers; their history stays
-        (edge case: staff who leave mid-month).
-      </p>
-      <div className="mb-4 flex items-end gap-4">
-        <Field label="Name" error={error ?? undefined}>
-          <Input value={name} className="w-64" invalid={!!error}
-            onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="Branch">
-          <Select value={branchId} onChange={(e) => setBranchId(e.target.value)} className="w-40">
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </Select>
-        </Field>
-        <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>
-          Add technician
-        </Button>
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <p className="text-[11px] text-text-muted">
+          Retiring a technician removes them from new-ticket pickers; their history stays
+          (edge case: staff who leave mid-month).
+        </p>
+        <Button variant="primary" onClick={() => setAddOpen(true)}>Add technician</Button>
       </div>
 
       {q.status === "loading" && <SkeletonRows rows={6} cols={3} />}
@@ -601,9 +632,11 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
             <tr>
               <Th {...th("name")}>Name</Th>
               <Th {...th("branch")}>Branch</Th>
+              <Th {...th("specialty")}>Type</Th>
+              <Th {...th("skill")}>Skill level</Th>
               <Th {...th("hired")}>Hired</Th>
               <Th {...th("status")}>Status</Th>
-              <Th></Th>
+              <Th align="right">Status toggle</Th>
             </tr>
           </thead>
           <tbody>
@@ -611,6 +644,8 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
               <tr key={t.id} className={t.active ? "" : "opacity-50"}>
                 <Td className="font-bold"><Truncate text={t.full_name} /></Td>
                 <Td>{branchName}</Td>
+                <Td>{t.specialty ?? "—"}</Td>
+                <Td>{t.skill_level ? SKILL_LABEL[t.skill_level] : "—"}</Td>
                 <Td className="tnum">{t.hired_on ?? "—"}</Td>
                 <Td>{t.active ? "Active" : <span className="text-text-muted">Retired</span>}</Td>
                 <Td align="right">
@@ -622,7 +657,97 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
           </tbody>
         </Table>
       )}
+
+      <AddTechnicianModal
+        open={addOpen}
+        branches={branches}
+        onClose={() => setAddOpen(false)}
+        onDone={() => { setAddOpen(false); q.retry(); }}
+      />
     </Card>
+  );
+}
+
+function AddTechnicianModal({ open, branches, onClose, onDone }: {
+  open: boolean;
+  branches: Branch[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [branchId, setBranchId] = useState(branches[0]?.id ?? "");
+  const [hiredOn, setHiredOn] = useState(new Date().toLocaleDateString("sv-SE"));
+  const [specialty, setSpecialty] = useState("");
+  const [skill, setSkill] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (name.trim() === "") {
+      setError("Enter the technician's name.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient().from("technicians").insert({
+      full_name: name.trim(),
+      branch_id: branchId,
+      hired_on: hiredOn || null,
+      specialty: specialty.trim() || null,
+      skill_level: skill || null,
+    });
+    setBusy(false);
+    if (error) {
+      setError("Not saved. Try again.");
+      return;
+    }
+    setName("");
+    setSpecialty("");
+    setSkill("");
+    onDone();
+  }
+
+  return (
+    <Modal title="Add technician" open={open} onClose={onClose}>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Name" error={error ?? undefined}>
+          <Input value={name} autoFocus invalid={!!error}
+            onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Branch">
+          <Select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Hire date">
+          <Input type="date" value={hiredOn} onChange={(e) => setHiredOn(e.target.value)} />
+        </Field>
+        <Field label="Type" hint="e.g. Hairdresser, Nail technician">
+          <Input value={specialty} list="specialty-suggestions"
+            onChange={(e) => setSpecialty(e.target.value)} />
+          <datalist id="specialty-suggestions">
+            {SPECIALTY_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
+          </datalist>
+        </Field>
+        <Field label="Skill level">
+          <Select value={skill} onChange={(e) => setSkill(e.target.value)}>
+            <option value="">—</option>
+            <option value="trainee">Trainee</option>
+            <option value="junior">Junior</option>
+            <option value="senior">Senior</option>
+            <option value="master">Master</option>
+          </Select>
+        </Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" busy={busy} busyLabel="Adding" onClick={() => void add()}>
+          Add technician
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -721,7 +846,7 @@ function UsersTab({ branches }: { branches: Branch[] }) {
               <Th {...th("role")}>Role</Th>
               <Th {...th("branch")}>Branch</Th>
               <Th {...th("status")}>Status</Th>
-              <Th></Th>
+              <Th align="right">Status toggle</Th>
             </tr>
           </thead>
           <tbody>
@@ -829,9 +954,12 @@ function ProfileToggle({ profile, onChanged }: { profile: ProfileRow; onChanged:
   return (
     <>
       <button
-        className="text-[11px] hover:underline"
+        className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-text-body hover:underline"
+        title={profile.active ? `Deactivate ${profile.full_name}` : `Restore ${profile.full_name}`}
+        aria-label={profile.active ? `Deactivate ${profile.full_name}` : `Restore ${profile.full_name}`}
         onClick={() => setConfirming(true)}
       >
+        {profile.active ? <UserX size={14} /> : <UserCheck size={14} />}
         {profile.active ? "Deactivate" : "Restore"}
       </button>
       <Modal
