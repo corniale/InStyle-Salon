@@ -258,6 +258,20 @@ function NewTicketForm() {
   const [loadedSeries, setLoadedSeries] = useState<string | null>(null);
   const prefilled = useRef(false);
 
+  // Park/resume/revise need a live connection (shared state, no queueing);
+  // the buttons disable themselves offline and teach the paper-slip fallback.
+  const [online, setOnline] = useState(true);
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+
   // Pre-fill everything from the ticket being revised or resumed.
   useEffect(() => {
     if (!loadId || prefilled.current) return;
@@ -1101,6 +1115,14 @@ function NewTicketForm() {
 
       {submitError && <ErrorState message={submitError} />}
 
+      {!online && (
+        <p className="rounded-[4px] bg-surface-page p-2 text-[11px] text-text-muted">
+          {reviseId || resumeId
+            ? "Offline — this ticket cannot be saved right now and will not queue. Try again when the connection returns."
+            : "Offline — parking is unavailable. Use a paper slip, then enter the full ticket at billing time with Save ticket; it will queue and sync automatically."}
+        </p>
+      )}
+
       <div className="flex items-center justify-between">
         <span className="text-[15px] font-bold tnum" data-stat>
           Total {formatCentavos(ticketTotal)}
@@ -1114,16 +1136,20 @@ function NewTicketForm() {
             Cancel
           </Button>
           {!reviseId && !resumeId && (
-            <Button busy={busy} busyLabel="Parking" onClick={() => void submit("park")}>
+            <Button busy={busy} busyLabel="Parking" disabled={!online}
+              onClick={() => void submit("park")}>
               Park — bill later
             </Button>
           )}
           {resumeId && (
-            <Button busy={busy} busyLabel="Saving" onClick={() => void submit("keepopen")}>
+            <Button busy={busy} busyLabel="Saving" disabled={!online}
+              onClick={() => void submit("keepopen")}>
               Save &amp; keep open
             </Button>
           )}
-          <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void submit("save")}>
+          <Button variant="primary" busy={busy} busyLabel="Saving"
+            disabled={!online && (!!reviseId || !!resumeId)}
+            onClick={() => void submit("save")}>
             {reviseId ? "Save revision" : resumeId ? "Bill & close" : "Save ticket"}
           </Button>
         </div>
