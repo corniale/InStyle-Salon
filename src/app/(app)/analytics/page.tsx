@@ -365,6 +365,8 @@ function TechnicianServiceCard({ branchId }: { branchId: string | null }) {
     return unwrap(res) as TechServiceRow[];
   }, [branchId]);
 
+  // Alphabetical for findability; the initial selection is still the
+  // busiest service so the card opens on something meaningful.
   const services = useMemo(() => {
     if (q.status !== "ready") return [];
     const byService = new Map<string, { id: string; name: string; treatments: number }>();
@@ -373,10 +375,15 @@ function TechnicianServiceCard({ branchId }: { branchId: string | null }) {
       s.treatments += r.treatments;
       byService.set(r.service_id, s);
     }
-    return [...byService.values()].sort((a, b) => b.treatments - a.treatments);
+    return [...byService.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [q.status, q.data]);
 
-  const activeService = serviceId || services[0]?.id || "";
+  const busiest = useMemo(
+    () => services.reduce((top, s) => (s.treatments > (top?.treatments ?? -1) ? s : top),
+      undefined as { id: string; treatments: number } | undefined),
+    [services],
+  );
+  const activeService = serviceId || busiest?.id || "";
   const serviceRows = useMemo(
     () => (q.status === "ready"
       ? q.data.filter((r) => r.service_id === activeService)
