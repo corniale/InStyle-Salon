@@ -9,7 +9,7 @@
 // is never the only encoding: the second series is dashed and every series
 // is direct-labelled at its end, with a legend above.
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCentavos } from "@/lib/money";
 
 export interface SeriesPoint {
@@ -33,7 +33,19 @@ export function LineChart({ series, height = 200, money = true }: {
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<number | null>(null);
-  const width = 640; // viewBox units; scales to container
+  // The viewBox tracks the container's real pixel width, so text renders
+  // at its stated size everywhere — a full-width chart and a half-width
+  // tile used to scale the same 9px label to very different sizes.
+  const [width, setWidth] = useState(640);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const measure = () => setWidth(Math.max(320, el.clientWidth));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const labels = series[0]?.points.map((p) => p.label) ?? [];
   const n = labels.length;
@@ -114,7 +126,7 @@ export function LineChart({ series, height = 200, money = true }: {
               />
               <text
                 x={M.left - 8} y={y(v) + 3}
-                textAnchor="end" fontSize="9"
+                textAnchor="end" fontSize="10"
                 fill="var(--color-text-muted)"
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
@@ -131,7 +143,7 @@ export function LineChart({ series, height = 200, money = true }: {
           return (
             <text
               key={l} x={x(i)} y={height - 4}
-              textAnchor="middle" fontSize="9"
+              textAnchor="middle" fontSize="10"
               fill="var(--color-text-muted)"
               style={{ fontVariantNumeric: "tabular-nums" }}
             >
@@ -167,7 +179,7 @@ export function LineChart({ series, height = 200, money = true }: {
                   return (
                     <text
                       x={x(i) + 6} y={y(v) + 3}
-                      fontSize="9" fontWeight="700" fill={s.color}
+                      fontSize="10" fontWeight="700" fill={s.color}
                     >
                       {s.name}
                     </text>

@@ -6,16 +6,16 @@
 // answered the spec's open question 4: May's sales were fully recorded —
 // it was the client names that went missing that month.
 
-import { Fragment, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import {
-  Card, EmptyState, ErrorState, SkeletonRows, Stat, Table, Td, Th, Truncate, useSort,
+  Card, EmptyState, ErrorState, Select, SkeletonRows, Stat, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
-import { LineChart } from "@/components/charts";
+import { BarList, LineChart } from "@/components/charts";
 import { Pagination, StatusBadge } from "@/components/client-bits";
 
 export default function AnalyticsPage() {
@@ -31,6 +31,10 @@ export default function AnalyticsPage() {
       <RetentionSummary branchId={branchId} />
       <MonthlyTrend branchId={branchId} />
       <PeakPeriods branchId={branchId} />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <TechnicianServiceCard branchId={branchId} />
+        <UtilisationCard branchId={branchId} />
+      </div>
       <RebookingByService branchId={branchId} />
       <AtRiskList branchId={branchId} />
     </div>
@@ -322,6 +326,188 @@ function HourStrip({ rows }: { rows: PeakRow[] }) {
         grows as the POS records times.
       </p>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Technician performance per service: pick a service, see who does it
+// most, how clients rate them at it, and how long they actually take
+// (timed tickets only — the efficiency figure is real or absent).
+// ---------------------------------------------------------------------------
+
+interface TechServiceRow {
+  service_id: string;
+  service_name: string;
+  technician_id: string;
+  technician_name: string;
+  branch_code: string;
+  treatments: number;
+  revenue_cents: number;
+  avg_rating: number | null;
+  rated: number;
+  timed: number;
+  avg_minutes: number | null;
+  standard_minutes: number;
+}
+
+const TECH_SERVICE_ACC: Record<string, (r: TechServiceRow) => unknown> = {
+  technician: (r) => r.technician_name,
+  treatments: (r) => r.treatments,
+  rating: (r) => r.avg_rating,
+  minutes: (r) => r.avg_minutes,
+};
+
+function TechnicianServiceCard({ branchId }: { branchId: string | null }) {
+  const [serviceId, setServiceId] = useState("");
+
+  const q = useQuery(async () => {
+    const res = await createClient().rpc("f_technician_service_stats", { p_branch: branchId });
+    return unwrap(res) as TechServiceRow[];
+  }, [branchId]);
+
+  const services = useMemo(() => {
+    if (q.status !== "ready") return [];
+    const byService = new Map<string, { id: string; name: string; treatments: number }>();
+    for (const r of q.data) {
+      const s = byService.get(r.service_id) ?? { id: r.service_id, name: r.service_name, treatments: 0 };
+      s.treatments += r.treatments;
+      byService.set(r.service_id, s);
+    }
+    return [...byService.values()].sort((a, b) => b.treatments - a.treatments);
+  }, [q.status, q.data]);
+
+  const activeService = serviceId || services[0]?.id || "";
+  const serviceRows = useMemo(
+    () => (q.status === "ready"
+      ? q.data.filter((r) => r.service_id === activeService)
+          .sort((a, b) => b.treatments - a.treatments)
+      : null),
+    [q.status, q.data, activeService],
+  );
+  const { rows, th } = useSort(serviceRows, TECH_SERVICE_ACC);
+  const standard = serviceRows?.[0]?.standard_minutes;
+
+  return (
+    <Card title="Technicians by service">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] text-text-muted">
+          Who does this service most, how clients rate them at it, and how
+          long they actually take.
+        </p>
+        <Select value={activeService} className="w-56" aria-label="Service"
+          onChange={(e) => setServiceId(e.target.value)}>
+          {services.map((s) => (
+            <option key={s.id} value={s.id}>{s.name} ({s.treatments.toLocaleString()})</option>
+          ))}
+        </Select>
+      </div>
+
+      {q.status === "loading" && <SkeletonRows rows={5} cols={4} />}
+      {q.status === "error" && (
+        <ErrorState message="Technician service stats did not load." onRetry={q.retry} />
+      )}
+      {q.status === "ready" && rows != null && rows.length === 0 && (
+        <p className="text-[13px] text-text-muted">No recorded treatments for this service.</p>
+      )}
+      {q.status === "ready" && rows != null && rows.length > 0 && (
+        <>
+          <Table>
+            <thead>
+              <tr>
+                <Th {...th("technician")}>Technician</Th>
+                <Th align="right" {...th("treatments")}>Treatments</Th>
+                <Th align="right" {...th("rating")}>Avg rating</Th>
+                <Th align="right" {...th("minutes")}>Avg minutes</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.technician_id}>
+                  <Td className="font-bold">
+                    <Truncate text={r.technician_name} max={22} />
+                    <span className="ml-1 text-[11px] text-text-muted">{r.branch_code}</span>
+                  </Td>
+                  <Td align="right" className="tnum">{r.treatments.toLocaleString()}</Td>
+                  <Td align="right" className="tnum">
+                    {r.avg_rating != null ? Number(r.avg_rating).toFixed(2) : "—"}
+                    {r.rated > 0 && (
+                      <span className="ml-1 text-[11px] text-text-muted">({r.rated})</span>
+                    )}
+                  </Td>
+                  <Td align="right" className="tnum">
+                    {r.avg_minutes != null ? Number(r.avg_minutes).toFixed(0) : "—"}
+                    {r.timed > 0 && (
+                      <span className="ml-1 text-[11px] text-text-muted">({r.timed})</span>
+                    )}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+          <p className="mt-2 text-[11px] text-text-muted">
+            Standard duration {standard} min. Minutes come only from tickets with recorded
+            times (counts in parentheses) — coverage grows as the POS captures them.
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Utilisation preview: busy hours per technician from recorded service
+// times. The real measure (busy vs scheduled hours) needs the Stage 2
+// shift schedule; this fills from what the POS already captures.
+// ---------------------------------------------------------------------------
+
+interface UtilRow {
+  technician_name: string;
+  branch_code: string;
+  tickets: number;
+  busy_minutes: number | null;
+  utilisation_pct: number | null;
+}
+
+function UtilisationCard({ branchId }: { branchId: string | null }) {
+  const q = useQuery(async () => {
+    const to = new Date().toLocaleDateString("sv-SE");
+    const from = new Date(Date.now() - 29 * 86400000).toLocaleDateString("sv-SE");
+    const res = await createClient().rpc("f_technician_ranking", {
+      p_branch: branchId, p_from: from, p_to: to, p_min_tickets: 1,
+    });
+    return unwrap(res) as UtilRow[];
+  }, [branchId]);
+
+  return (
+    <Card title="Utilisation by technician (preview)">
+      {q.status === "loading" && <SkeletonRows rows={5} cols={2} />}
+      {q.status === "error" && (
+        <ErrorState message="Utilisation did not load." onRetry={q.retry} />
+      )}
+      {q.status === "ready" && q.data.length === 0 && (
+        <p className="text-[13px] text-text-muted">No service activity in the last 30 days.</p>
+      )}
+      {q.status === "ready" && q.data.length > 0 && (
+        <>
+          <BarList
+            money={false}
+            items={[...q.data]
+              .sort((a, b) => (b.busy_minutes ?? 0) - (a.busy_minutes ?? 0))
+              .slice(0, 10)
+              .map((r) => ({
+                label: `${r.technician_name} (${r.branch_code})`,
+                value: Math.round((r.busy_minutes ?? 0) / 60),
+                sub: `${r.tickets} tickets`,
+              }))}
+          />
+          <p className="mt-2 text-[11px] text-text-muted">
+            Busy hours over the last 30 days, from recorded service times. True utilisation —
+            busy against scheduled hours — arrives with Stage 2 shift scheduling; this preview
+            sharpens as the POS captures times.
+          </p>
+        </>
+      )}
+    </Card>
   );
 }
 
