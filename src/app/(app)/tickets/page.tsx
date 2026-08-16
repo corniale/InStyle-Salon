@@ -15,6 +15,7 @@ import {
   Table, Td, Th, Textarea, Truncate, useSort,
 } from "@/components/ui";
 import { csvPesos, downloadCsv } from "@/lib/csv";
+import { Pagination } from "@/components/client-bits";
 import { listQueue, removeFromQueue, type QueuedTicket } from "@/lib/offline/queue";
 import { drainQueue } from "@/lib/offline/sync";
 import { onQueueChanged } from "@/lib/offline/queue";
@@ -83,6 +84,12 @@ export default function TicketsPage() {
 
   const { rows, th } = useSort(q.status === "ready" ? q.data : null, TICKET_ACC);
 
+  // Long days render in pages of 50 so the table stays snappy.
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [branchId, date]);
+  const TICKETS_PAGE = 50;
+  const pagedRows = rows?.slice(page * TICKETS_PAGE, page * TICKETS_PAGE + TICKETS_PAGE) ?? null;
+
   function exportCsv() {
     if (q.status !== "ready") return;
     downloadCsv(
@@ -112,13 +119,14 @@ export default function TicketsPage() {
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Tickets</h1>
         <div className="flex items-center gap-4">
-          <Input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-40"
-            aria-label="Ticket date"
-          />
+          <span className="w-40 shrink-0">
+            <Input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              aria-label="Ticket date"
+            />
+          </span>
           {isAdminUp && (
             <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
               Export CSV
@@ -226,7 +234,7 @@ export default function TicketsPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((t) => {
+              {(pagedRows ?? []).map((t) => {
                 const total = t.ticket_lines.reduce((s, l) => s + l.total_cents, 0);
                 const share = t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0);
                 const voided = t.voided_at != null;
@@ -325,6 +333,15 @@ export default function TicketsPage() {
               })}
             </tbody>
           </Table>
+        )}
+        {rows != null && (
+          <Pagination
+            page={page}
+            total={rows.length}
+            onPage={setPage}
+            noun="tickets"
+            pageSize={TICKETS_PAGE}
+          />
         )}
       </Card>
 

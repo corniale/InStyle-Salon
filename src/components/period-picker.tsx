@@ -106,30 +106,37 @@ export function PeriodPicker({ value, onChange, withPastMonths, withRange }: {
 
       {withRange ? (
         <div className="flex items-center gap-2">
-          <Input type="date" value={value.from} className="w-40" aria-label="From"
-            onChange={(e) => {
-              const from = e.target.value;
-              if (from) onChange({ kind: "range", from, to: value.to < from ? from : value.to });
-            }} />
+          {/* Fixed-width wrappers: the input's base w-full must not win in a
+              flex row, or the field stretches and wraps the whole header. */}
+          <span className="w-40 shrink-0">
+            <Input type="date" value={value.from} aria-label="From"
+              onChange={(e) => {
+                const from = e.target.value;
+                if (from) onChange({ kind: "range", from, to: value.to < from ? from : value.to });
+              }} />
+          </span>
           <span className="text-[13px] text-text-muted">to</span>
-          <Input type="date" value={value.to} className="w-40" aria-label="To"
-            onChange={(e) => {
-              const to = e.target.value;
-              if (to) onChange({ kind: "range", from: value.from > to ? to : value.from, to });
-            }} />
+          <span className="w-40 shrink-0">
+            <Input type="date" value={value.to} aria-label="To"
+              onChange={(e) => {
+                const to = e.target.value;
+                if (to) onChange({ kind: "range", from: value.from > to ? to : value.from, to });
+              }} />
+          </span>
         </div>
       ) : (
-        <Input
-          type="date"
-          value={value.kind === "day" ? value.from : ""}
-          max={todayISO()}
-          className="w-40"
-          aria-label="Date"
-          onChange={(e) => {
-            const d = e.target.value;
-            if (d) onChange({ kind: "day", from: d, to: d });
-          }}
-        />
+        <span className="w-40 shrink-0">
+          <Input
+            type="date"
+            value={value.kind === "day" ? value.from : ""}
+            max={todayISO()}
+            aria-label="Date"
+            onChange={(e) => {
+              const d = e.target.value;
+              if (d) onChange({ kind: "day", from: d, to: d });
+            }}
+          />
+        </span>
       )}
     </div>
   );

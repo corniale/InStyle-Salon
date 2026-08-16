@@ -7,7 +7,7 @@
 // before close (edge case 21); a closed day locks its takings (edge case 12);
 // reopening is manager+.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 import { csvPesos, downloadCsv } from "@/lib/csv";
+import { Pagination } from "@/components/client-bits";
 
 interface DailyCashRow {
   branch_id: string;
@@ -399,14 +400,16 @@ function OpeningBalanceEditor({ branchId, date, cents, onSaved }: {
     <div className="flex items-center justify-between gap-4">
       <span className="whitespace-nowrap text-text-muted">Opening balance (change fund)</span>
       <span className="flex shrink-0 items-center gap-2">
-        <Input
-          inputMode="decimal"
-          value={input}
-          invalid={invalid}
-          className="h-7 w-24 text-right tnum"
-          aria-label="Opening balance in pesos"
-          onChange={(e) => setInput(e.target.value)}
-        />
+        <span className="w-24 shrink-0">
+          <Input
+            inputMode="decimal"
+            value={input}
+            invalid={invalid}
+            className="h-7 text-right tnum"
+            aria-label="Opening balance in pesos"
+            onChange={(e) => setInput(e.target.value)}
+          />
+        </span>
         <Button busy={busy} busyLabel="Saving" onClick={() => void save()}>Save</Button>
       </span>
     </div>
@@ -456,6 +459,12 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
   onChanged: () => void;
 }) {
   const { rows: sortedExpenses, th } = useSort(expenses, EXPENSE_ACC);
+  // Month/YTD views can hold hundreds of expense lines — page them at 50.
+  const EXPENSES_PAGE = 50;
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [expenses]);
+  const pagedExpenses =
+    sortedExpenses?.slice(page * EXPENSES_PAGE, page * EXPENSES_PAGE + EXPENSES_PAGE) ?? null;
   const [category, setCategory] = useState("supplies");
   const [amountInput, setAmountInput] = useState("");
   const [description, setDescription] = useState("");
@@ -553,7 +562,7 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
             </tr>
           </thead>
           <tbody>
-            {sortedExpenses.map((e) => (
+            {(pagedExpenses ?? []).map((e) => (
               <tr key={e.id}>
                 {!single && <Td className="tnum">{e.spent_on}</Td>}
                 <Td>{e.category}</Td>
@@ -572,6 +581,15 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
             )}
           </tbody>
         </Table>
+      )}
+      {sortedExpenses != null && (
+        <Pagination
+          page={page}
+          total={sortedExpenses.length}
+          onPage={setPage}
+          noun="expenses"
+          pageSize={EXPENSES_PAGE}
+        />
       )}
     </Card>
   );

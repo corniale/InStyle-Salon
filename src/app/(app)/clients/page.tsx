@@ -216,13 +216,14 @@ function ClientsList() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Clients</h1>
         <div className="flex items-center gap-2">
-          <Input
-            placeholder="Search name or phone"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); syncUrl(e.target.value, 0); }}
-            className="w-64"
-            aria-label="Search clients"
-          />
+          <span className="w-64 shrink-0">
+            <Input
+              placeholder="Search name or phone"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); syncUrl(e.target.value, 0); }}
+              aria-label="Search clients"
+            />
+          </span>
           {isAdminUp && (
             <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
               Export CSV
