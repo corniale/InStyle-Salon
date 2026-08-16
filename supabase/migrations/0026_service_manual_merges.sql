@@ -3,7 +3,8 @@
 --
 --   MANICURE CLEANING -> MANICURE (CLEANING), type Nail & Foot
 --   PEDICURE CLEANING -> PEDICURE (CLEANING), type Nail & Foot
---   FOOTSCRUB         -> type Nail & Foot
+--
+-- (FOOTSCRUB's type was already fixed by hand in Settings.)
 --
 -- Same merge rules as 0025: history repoints to the keeper, the keeper's
 -- price list wins (a loser's prices carry over only for a branch where
@@ -84,25 +85,9 @@ begin
       v_type := null;
     end loop;
   end loop;
-
-  -- FOOTSCRUB belongs under Nail & Foot.
-  for r in
-    select s.id, st.business_id
-    from services s join service_types st on st.id = s.service_type_id
-    where lower(s.name) = 'footscrub'
-  loop
-    select id into v_type from service_types
-    where business_id = r.business_id and lower(name) = 'nail & foot'
-    limit 1;
-    if v_type is not null then
-      update services set service_type_id = v_type
-      where id = r.id and service_type_id <> v_type;
-    end if;
-    v_type := null;
-  end loop;
 end $$;
 
--- Verify: the three services, their final type, history and current prices.
+-- Verify: the merged services, their final type, history and current prices.
 select s.name, st.name as type, s.active,
        coalesce((select sum(l.qty) from ticket_lines l where l.service_id = s.id), 0) as treatments,
        (select string_agg(b.code || ' ' || round(p.price_cents / 100.0, 2), ' · '
@@ -116,6 +101,6 @@ select s.name, st.name as type, s.active,
                                     and p2.branch_id = p.branch_id)) as current_prices
 from services s
 join service_types st on st.id = s.service_type_id
-where lower(s.name) in ('manicure (cleaning)', 'pedicure (cleaning)', 'footscrub')
-   or lower(s.name) in ('manicure cleaning', 'pedicure cleaning')
+where lower(s.name) in ('manicure (cleaning)', 'pedicure (cleaning)',
+                        'manicure cleaning', 'pedicure cleaning')
 order by s.name;
