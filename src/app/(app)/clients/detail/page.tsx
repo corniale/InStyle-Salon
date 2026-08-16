@@ -62,6 +62,7 @@ function ClientDetail() {
   const router = useRouter();
   const { isManagerUp, canSeeAnalytics, branches } = useSession();
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   // The list's position rides along in the URL, so back (and the redirect
   // after a merge) returns to the exact page of the client list.
@@ -157,16 +158,28 @@ function ClientDetail() {
             {client.special_discount_pct != null &&
               ` · special discount ${Number(client.special_discount_pct)}%`}
           </p>
-          {client.birth_month == null && (
-            <BirthdaySetter clientId={client.id} onSet={q.retry} />
-          )}
-          {isManagerUp && (
-            <SpecialDiscountEditor
-              clientId={client.id}
-              current={client.special_discount_pct}
-              onSet={q.retry}
-            />
-          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
+            {isManagerUp && (
+              <button
+                className="underline underline-offset-2 hover:text-text-body"
+                onClick={() => setEditOpen(true)}
+              >
+                Edit details
+              </button>
+            )}
+            {isManagerUp && client.birth_month == null && <span aria-hidden>·</span>}
+            {client.birth_month == null && (
+              <BirthdaySetter clientId={client.id} onSet={q.retry} />
+            )}
+            {isManagerUp && <span aria-hidden>·</span>}
+            {isManagerUp && (
+              <SpecialDiscountEditor
+                clientId={client.id}
+                current={client.special_discount_pct}
+                onSet={q.retry}
+              />
+            )}
+          </div>
         </div>
         {isManagerUp && (
           <Button onClick={() => setMergeOpen(true)}>Merge into another client</Button>
@@ -220,6 +233,13 @@ function ClientDetail() {
         </Card>
       )}
 
+      <EditClientModal
+        open={editOpen}
+        client={client}
+        onClose={() => setEditOpen(false)}
+        onDone={() => { setEditOpen(false); q.retry(); }}
+      />
+
       <MergeModal
         open={mergeOpen}
         loser={client}
@@ -228,6 +248,106 @@ function ClientDetail() {
           router.push(`/clients/detail?id=${winnerId}${listQS ? `&${listQS}` : ""}`)}
       />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Identity fixes: typos in the name, a corrected or changed phone number,
+// location. Manager+ (RLS enforces it). Giving a walk-in a real number
+// turns them into an identified client; a number that already belongs to
+// someone else means the records should be merged, not edited.
+// ---------------------------------------------------------------------------
+
+function EditClientModal({ open, client, onClose, onDone }: {
+  open: boolean;
+  client: Client;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [town, setTown] = useState("");
+  const [barangay, setBarangay] = useState("");
+  const [loadedFor, setLoadedFor] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const seedKey = `${client.id}:${open}`;
+  if (open && loadedFor !== seedKey) {
+    setName(client.full_name ?? "");
+    setPhone(client.phone_declined ? "" : client.phone);
+    setTown(client.town ?? "");
+    setBarangay(client.barangay ?? "");
+    setLoadedFor(seedKey);
+    setError(null);
+  }
+
+  async function save() {
+    const p = phone.replace(/\D/g, "");
+    const patch: Record<string, unknown> = {
+      full_name: name.trim() || null,
+      town: town.trim() || null,
+      barangay: barangay.trim() || null,
+    };
+    if (client.phone_declined) {
+      if (p !== "") {
+        if (!/^\d{11}$/.test(p)) {
+          setError("Phone number must be 11 digits, or leave it empty.");
+          return;
+        }
+        patch.phone = p;
+        patch.phone_declined = false;
+      }
+    } else {
+      if (!/^\d{11}$/.test(p)) {
+        setError("Phone number must be 11 digits.");
+        return;
+      }
+      if (p !== client.phone) patch.phone = p;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient().from("clients").update(patch).eq("id", client.id);
+    setBusy(false);
+    if (error) {
+      setError(/unique|duplicate/i.test(error.message)
+        ? "That number already belongs to another client — merge the two records instead."
+        : "The changes were not saved. Try again.");
+      return;
+    }
+    onDone();
+  }
+
+  return (
+    <Modal title="Edit client details" open={open} onClose={onClose}>
+      <p className="mb-4 text-[13px] text-text-muted">
+        History stays attached — this fixes the record, it does not create a new one.
+        {client.phone_declined &&
+          " Adding a phone number turns this walk-in into an identified client."}
+      </p>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Name">
+          <Input value={name} autoFocus onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Phone number" error={error ?? undefined}>
+          <Input inputMode="numeric" maxLength={11} value={phone} invalid={!!error}
+            placeholder={client.phone_declined ? "09XXXXXXXXX (optional)" : "09XXXXXXXXX"}
+            onChange={(e) => setPhone(e.target.value.replace(/\D/g, ""))} />
+        </Field>
+        <Field label="Town">
+          <Input value={town} onChange={(e) => setTown(e.target.value)} />
+        </Field>
+        <Field label="Barangay">
+          <Input value={barangay} onChange={(e) => setBarangay(e.target.value)} />
+        </Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void save()}>
+          Save
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -270,7 +390,7 @@ function SpecialDiscountEditor({ clientId, current, onSet }: {
   if (!open) {
     return (
       <button
-        className="mt-1 text-[11px] text-text-muted hover:text-text-body hover:underline"
+        className="underline underline-offset-2 hover:text-text-body"
         onClick={() => setOpen(true)}
       >
         {current != null ? "Change special discount" : "Set a special discount"}
@@ -278,7 +398,7 @@ function SpecialDiscountEditor({ clientId, current, onSet }: {
     );
   }
   return (
-    <div className="mt-2 flex items-end gap-2">
+    <div className="flex items-end gap-2">
       <Field label="Special discount (%)" error={error ?? undefined}
         hint="Applied to every service on this client's tickets">
         <Input inputMode="numeric" value={input} className="w-24" invalid={!!error}
@@ -482,7 +602,7 @@ function BirthdaySetter({ clientId, onSet }: { clientId: string; onSet: () => vo
   if (!open) {
     return (
       <button
-        className="mt-1 text-[11px] text-text-muted underline underline-offset-2 hover:text-text-body"
+        className="underline underline-offset-2 hover:text-text-body"
         onClick={() => setOpen(true)}
       >
         Add birthday
@@ -511,7 +631,7 @@ function BirthdaySetter({ clientId, onSet }: { clientId: string; onSet: () => vo
   }
 
   return (
-    <span className="mt-2 flex items-end gap-2">
+    <span className="flex items-end gap-2">
       <Field label="Birthday" error={error ?? undefined}>
         <span className="flex gap-2">
           <Select value={month} className="w-28" aria-label="Birth month"
