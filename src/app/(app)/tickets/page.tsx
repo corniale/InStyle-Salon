@@ -29,7 +29,7 @@ interface TicketRow {
   is_new_client: boolean;
   voided_at: string | null;
   void_reason: string | null;
-  clients: { full_name: string | null; phone: string; phone_declined: boolean } | null;
+  clients: { id: string; full_name: string | null; phone: string; phone_declined: boolean } | null;
   ticket_lines: {
     total_cents: number;
     company_share_cents: number;
@@ -72,7 +72,7 @@ export default function TicketsPage() {
     let query = supabase
       .from("tickets")
       .select(
-        "id, series_no, ticket_date, status, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))",
+        "id, series_no, ticket_date, status, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(id, full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))",
       )
       .eq("ticket_date", date)
       .order("created_at", { ascending: false })
@@ -152,7 +152,16 @@ export default function TicketsPage() {
                       {t.series_no ?? "—"}
                     </Link>
                   </Td>
-                  <Td><Truncate text={clientLabel(t)} /></Td>
+                  <Td>
+                    {t.clients ? (
+                      <Link href={`/clients/detail?id=${t.clients.id}`}
+                        className="hover:underline">
+                        <Truncate text={clientLabel(t)} />
+                      </Link>
+                    ) : (
+                      <Truncate text={clientLabel(t)} />
+                    )}
+                  </Td>
                   <Td>
                     <Truncate
                       text={t.ticket_lines.map((l) => l.services?.name ?? "?").join(", ") || "—"}
@@ -248,12 +257,14 @@ export default function TicketsPage() {
                       )}
                     </Td>
                     <Td>
-                      <Truncate
-                        text={
-                          t.clients?.full_name ??
-                          (t.clients?.phone_declined ? "Walk-in" : (t.clients?.phone ?? "—"))
-                        }
-                      />
+                      {t.clients ? (
+                        <Link href={`/clients/detail?id=${t.clients.id}`}
+                          className="hover:underline">
+                          <Truncate text={clientLabel(t)} />
+                        </Link>
+                      ) : (
+                        <Truncate text={clientLabel(t)} />
+                      )}
                     </Td>
                     <Td>
                       <Truncate
