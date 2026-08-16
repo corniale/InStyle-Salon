@@ -4,9 +4,9 @@
 //
 // - Client by phone: 11 digits required, existing client surfaced and reused
 //   (edge case 2), explicit "walk-in, declined" escape hatch (open q. 1).
-// - Lines: service, technician, assist, qty, price (prefilled from the branch
-//   price list, editable for negotiated prices — edge case 7), discount,
-//   rating, package redemption.
+// - Lines: service, technician, assist, qty, price (locked to the branch
+//   price list — any deviation from the list is recorded as a discount so
+//   pricing stays consistent), discount, rating, package redemption.
 // - Payments: cash and online legs, split supported (edge case 19).
 // - Submit carries a client-generated idempotency key. Offline or on network
 //   failure the ticket queues locally and the UI confirms immediately.
@@ -234,7 +234,10 @@ export default function NewTicketPage() {
       if (!l.technician_id) e[`line-${l.key}-tech`] = "Pick a technician.";
       if (l.assist_technician_id && l.assist_technician_id === l.technician_id)
         e[`line-${l.key}-assist`] = "Assist must be a different person.";
-      if (unit == null || unit < 0) e[`line-${l.key}-price`] = "Enter the price in pesos.";
+      if (unit == null || unit < 0)
+        e[`line-${l.key}-price`] = l.service_id
+          ? "No price is set for this branch — add it in Settings → Services and prices."
+          : "Pick a service to fill the price.";
       if (!Number.isFinite(pct) || pct < 0 || pct > 100)
         e[`line-${l.key}-discount`] = "Discount must be 0 to 100 percent.";
       if (l.qty < 1) e[`line-${l.key}-qty`] = "Quantity must be at least 1.";
@@ -533,7 +536,7 @@ export default function NewTicketPage() {
                           {services
                             .filter((s) => s.service_type_id === t.id)
                             .map((s) => (
-                              <option key={s.id} value={s.id}>
+                              <option key={s.id} value={s.id} disabled={!priceBook.has(s.id)}>
                                 {s.name}
                                 {priceBook.has(s.id)
                                   ? ` — ${formatCentavos(priceBook.get(s.id)!.price_cents)}`
@@ -585,11 +588,16 @@ export default function NewTicketPage() {
                       onChange={(e) => updateLine(line.key, { qty: Math.max(1, Number(e.target.value) || 1) })}
                     />
                   </Field>
-                  <Field label="Price (₱)" error={errors[`line-${line.key}-price`]}>
+                  <Field
+                    label="Price (₱)"
+                    error={errors[`line-${line.key}-price`]}
+                    hint="From the price list — adjust the bill with a discount"
+                  >
                     <Input
-                      inputMode="decimal" value={line.priceInput}
+                      value={line.priceInput}
+                      disabled
                       invalid={!!errors[`line-${line.key}-price`]}
-                      onChange={(e) => updateLine(line.key, { priceInput: e.target.value })}
+                      aria-label="Price from the price list"
                     />
                   </Field>
                   <Field label="Rating (optional)">
