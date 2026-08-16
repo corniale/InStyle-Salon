@@ -4,8 +4,15 @@
 // error / empty / populated and a retry that preserves filters. Dashboard
 // tiles each use their own instance, so one failed query never blanks the
 // page — partial failure is per-tile by construction.
+//
+// Failures retry automatically (twice, with backoff) before an error card
+// ever shows. The common first-load failure is a stale auth token racing
+// the queries — a tab reopened after hours fires requests before the
+// background token refresh lands — so between attempts we nudge the
+// session refresh. Every useQuery fetcher is a read, so retrying is safe.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 export type QueryState<T> =
   | { status: "loading"; data?: undefined; error?: undefined }
@@ -24,18 +31,35 @@ export function useQuery<T>(
   useEffect(() => {
     let alive = true;
     setState({ status: "loading" });
-    fetcherRef
-      .current()
-      .then((data) => {
-        if (alive) setState({ status: "ready", data });
-      })
-      .catch((e: unknown) => {
-        if (alive)
-          setState({
-            status: "error",
-            error: e instanceof Error ? e.message : "The request failed.",
-          });
-      });
+
+    void (async () => {
+      const attempts = 3;
+      for (let i = 0; i < attempts; i++) {
+        try {
+          const data = await fetcherRef.current();
+          if (alive) setState({ status: "ready", data });
+          return;
+        } catch (e: unknown) {
+          if (!alive) return;
+          if (i === attempts - 1) {
+            setState({
+              status: "error",
+              error: e instanceof Error ? e.message : "The request failed.",
+            });
+            return;
+          }
+          // Refresh a possibly-expired session, then back off and retry.
+          try {
+            await createClient().auth.getSession();
+          } catch {
+            // The retry itself will surface a real auth failure.
+          }
+          await new Promise((r) => setTimeout(r, 700 * (i + 1)));
+          if (!alive) return;
+        }
+      }
+    })();
+
     return () => {
       alive = false;
     };
