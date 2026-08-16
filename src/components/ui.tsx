@@ -267,14 +267,22 @@ export function Field({ label, error, children, hint }: {
 }
 
 const inputClass =
-  "h-8 w-full rounded-[4px] border border-border bg-surface-card px-2 text-[13px] text-text-body outline-none focus:border-ink disabled:opacity-50";
+  "h-8 rounded-[4px] border border-border bg-surface-card px-2 text-[13px] text-text-body outline-none focus:border-ink disabled:opacity-50";
+
+// The base class is full-width UNLESS the caller passes its own w-* utility.
+// Two width classes on one element resolve by stylesheet order, not by
+// className order, so "w-40" against a baked-in "w-full" is a coin toss —
+// dropping w-full here makes caller widths reliable.
+function widthClass(className: string): string {
+  return /(^|\s)(w-|min-w-|max-w-)/.test(className) ? "" : "w-full";
+}
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }>(
   function Input({ invalid, className = "", ...rest }, ref) {
     return (
       <input
         ref={ref}
-        className={`${inputClass} ${invalid ? "border-brand-red" : ""} ${className}`}
+        className={`${inputClass} ${widthClass(className)} ${invalid ? "border-brand-red" : ""} ${className}`}
         {...rest}
       />
     );
@@ -286,7 +294,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSel
     return (
       <select
         ref={ref}
-        className={`${inputClass} ${invalid ? "border-brand-red" : ""} ${className}`}
+        className={`${inputClass} ${widthClass(className)} ${invalid ? "border-brand-red" : ""} ${className}`}
         {...rest}
       >
         {children}

@@ -68,19 +68,45 @@ export default function TicketsPage() {
   const [date, setDate] = useState(todayISO());
   const [voidTarget, setVoidTarget] = useState<TicketRow | null>(null);
 
+  const TICKET_COLS =
+    "id, series_no, ticket_date, status, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(id, full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))";
+
   const q = useQuery(async () => {
+    // Page past the 1,000-row response cap — the table and the CSV export
+    // must both cover the whole day, however busy it was.
+    const supabase = createClient();
+    const PAGE = 1000;
+    const all: TicketRow[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      let query = supabase
+        .from("tickets")
+        .select(TICKET_COLS)
+        .eq("ticket_date", date)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      if (branchId) query = query.eq("branch_id", branchId);
+      const chunk = unwrap(await query) as unknown as TicketRow[];
+      all.push(...chunk);
+      if (chunk.length < PAGE) break;
+    }
+    return all;
+  }, [branchId, date]);
+
+  // Open tickets are shown whatever day they were parked on — one parked
+  // just before midnight must still be findable (and billable) tomorrow,
+  // or it silently blocks that day's cash close.
+  const openQ = useQuery(async () => {
     const supabase = createClient();
     let query = supabase
       .from("tickets")
-      .select(
-        "id, series_no, ticket_date, status, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(id, full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))",
-      )
-      .eq("ticket_date", date)
-      .order("created_at", { ascending: false })
-      .limit(200);
+      .select(TICKET_COLS)
+      .eq("status", "open")
+      .is("voided_at", null)
+      .order("created_at", { ascending: true });
     if (branchId) query = query.eq("branch_id", branchId);
     return unwrap(await query) as unknown as TicketRow[];
-  }, [branchId, date]);
+  }, [branchId]);
 
   const { rows, th } = useSort(q.status === "ready" ? q.data : null, TICKET_ACC);
 
@@ -140,12 +166,13 @@ export default function TicketsPage() {
 
       <OfflineQueuePanel />
 
-      {q.status === "ready" && q.data.some((t) => t.status === "open" && !t.voided_at) && (
+      {openQ.status === "ready" && openQ.data.length > 0 && (
         <Card title="Open tickets — waiting to be billed">
           <Table>
             <thead>
               <tr>
                 <Th>Ticket</Th>
+                <Th>Parked on</Th>
                 <Th>Client</Th>
                 <Th>Services so far</Th>
                 <Th align="right">Running total</Th>
@@ -153,12 +180,15 @@ export default function TicketsPage() {
               </tr>
             </thead>
             <tbody>
-              {q.data.filter((t) => t.status === "open" && !t.voided_at).map((t) => (
+              {openQ.data.map((t) => (
                 <tr key={t.id}>
                   <Td className="tnum">
                     <Link href={`/tickets/detail?id=${t.id}`} className="font-bold hover:underline">
                       {t.series_no ?? "—"}
                     </Link>
+                  </Td>
+                  <Td className={`tnum${t.ticket_date !== todayISO() ? " font-bold text-brand-red" : ""}`}>
+                    {t.ticket_date}
                   </Td>
                   <Td>
                     {t.clients ? (
@@ -351,6 +381,7 @@ export default function TicketsPage() {
         onDone={() => {
           setVoidTarget(null);
           q.retry();
+          openQ.retry();
         }}
       />
 

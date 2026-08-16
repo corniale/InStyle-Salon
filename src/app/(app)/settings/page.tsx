@@ -92,17 +92,30 @@ function ServicesTab({ branches }: { branches: Branch[] }) {
   const q = useQuery(async () => {
     const supabase = createClient();
     const today = new Date().toLocaleDateString("sv-SE");
-    const [typesRes, servicesRes, prices] = await Promise.all([
+    const [typesRes, servicesRes] = await Promise.all([
       supabase.from("service_types").select("*").order("sort_order"),
       supabase.from("services").select("*").order("name"),
-      supabase
+    ]);
+    // Price history only grows (every change inserts a row) and the current
+    // price may be an OLD row for a stable service — page past the 1,000-row
+    // response cap or long-priced services would wrongly show "not offered".
+    const PAGE = 1000;
+    const priceRows: PriceRow[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const res = await supabase
         .from("branch_service_prices")
         .select("branch_id, service_id, price_cents, effective_from")
         .lte("effective_from", today)
-        .order("effective_from", { ascending: false }),
-    ]);
+        .order("effective_from", { ascending: false })
+        .order("branch_id", { ascending: true })
+        .order("service_id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      const chunk = unwrap(res) as PriceRow[];
+      priceRows.push(...chunk);
+      if (chunk.length < PAGE) break;
+    }
     const priceMap = new Map<string, PriceRow>();
-    for (const p of unwrap(prices) as PriceRow[]) {
+    for (const p of priceRows) {
       const key = `${p.branch_id}:${p.service_id}`;
       if (!priceMap.has(key)) priceMap.set(key, p);
     }
@@ -853,6 +866,10 @@ function TargetRow({ branch }: { branch: Branch }) {
 // Staff accounts
 // ---------------------------------------------------------------------------
 
+const ROLE_LABEL: Record<string, string> = {
+  owner: "Owner", admin: "Admin", manager: "Branch manager", front_desk: "Front desk",
+};
+
 const USER_ACC: Record<string, (p: ProfileRow) => unknown> = {
   name: (p) => p.full_name,
   role: (p) => p.role,
@@ -861,6 +878,7 @@ const USER_ACC: Record<string, (p: ProfileRow) => unknown> = {
 };
 
 function UsersTab({ branches }: { branches: Branch[] }) {
+  const { profile } = useSession();
   const q = useQuery(async () => {
     const res = await createClient().from("profiles").select("*").order("full_name");
     return unwrap(res) as ProfileRow[];
@@ -888,25 +906,37 @@ function UsersTab({ branches }: { branches: Branch[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((p) => (
-              <tr key={p.id} className={p.active ? "" : "opacity-50"}>
-                <Td className="font-bold"><Truncate text={p.full_name} /></Td>
-                <Td>
-                  <RoleSelect profile={p} branches={branches} onChanged={q.retry} />
-                </Td>
-                <Td>
-                  {p.role === "owner" || p.role === "admin" ? (
-                    "All branches"
-                  ) : (
-                    <BranchSelect profile={p} branches={branches} onChanged={q.retry} />
-                  )}
-                </Td>
-                <Td>{p.active ? "Active" : <span className="text-text-muted">Deactivated</span>}</Td>
-                <Td align="right">
-                  <ProfileToggle profile={p} onChanged={q.retry} />
-                </Td>
-              </tr>
-            ))}
+            {rows.map((p) => {
+              // Your own row is read-only: demoting or deactivating yourself
+              // locks you out of this page with no way back from the app.
+              const self = p.id === profile.id;
+              return (
+                <tr key={p.id} className={p.active ? "" : "opacity-50"}>
+                  <Td className="font-bold">
+                    <Truncate text={p.full_name} />
+                    {self && <span className="ml-2 text-[11px] text-text-muted">(you)</span>}
+                  </Td>
+                  <Td>
+                    {self ? (
+                      ROLE_LABEL[p.role] ?? p.role
+                    ) : (
+                      <RoleSelect profile={p} branches={branches} onChanged={q.retry} />
+                    )}
+                  </Td>
+                  <Td>
+                    {p.role === "owner" || p.role === "admin" ? (
+                      "All branches"
+                    ) : (
+                      <BranchSelect profile={p} branches={branches} onChanged={q.retry} />
+                    )}
+                  </Td>
+                  <Td>{p.active ? "Active" : <span className="text-text-muted">Deactivated</span>}</Td>
+                  <Td align="right">
+                    {!self && <ProfileToggle profile={p} onChanged={q.retry} />}
+                  </Td>
+                </tr>
+              );
+            })}
           </tbody>
         </Table>
       )}

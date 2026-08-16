@@ -17,6 +17,7 @@ import {
   Button, Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 import { Pagination, StatusBadge, formatBirthday, formatClientNo, CLIENTS_PAGE_SIZE as PAGE } from "@/components/client-bits";
+import { csvCell } from "@/lib/csv";
 
 interface ClientRow {
   id: string;
@@ -97,6 +98,9 @@ function ClientsList() {
       .select("id, client_no, phone, phone_declined, full_name, town, inquiry_source, first_visit_on", { count: "exact" })
       .is("merged_into_id", null)
       .order("full_name", { ascending: true, nullsFirst: false })
+      // Unique tiebreaker: many rows tie on name (all the nameless walk-ins
+      // especially), and without it page windows overlap and skip rows.
+      .order("id", { ascending: true })
       .range(page * PAGE, page * PAGE + PAGE - 1);
 
     const s = search.trim();
@@ -126,6 +130,17 @@ function ClientsList() {
 
   const { rows, th } = useSort(q.status === "ready" ? q.data.rows : null, CLIENT_ACC);
   const [exporting, setExporting] = useState(false);
+
+  // A stale URL can point past the end (e.g. the last client on the last
+  // page was merged away). Snap back to the real last page instead of
+  // rendering a dead empty state with no pagination controls.
+  useEffect(() => {
+    if (q.status !== "ready") return;
+    if (q.data.rows.length > 0 || q.data.total === 0 || page === 0) return;
+    const last = Math.max(0, Math.ceil(q.data.total / PAGE) - 1);
+    if (page > last) syncUrl(urlQ, last);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.status, page]);
 
   // CSV of the whole (searched) list, not just the visible page. Fetched in
   // 1,000-row pages under the API cap; retention joined in batches.
@@ -170,10 +185,9 @@ function ClientsList() {
         }
       }
 
-      const esc = (v: string | number | null | undefined) => {
-        const t = v == null ? "" : String(v);
-        return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-      };
+      // Shared escaping (including the formula-injection guard) — a client
+      // name starting with "=" must not execute when the file opens in Excel.
+      const esc = csvCell;
       const pesos = (cents: number | null) =>
         cents == null ? "" : (cents / 100).toFixed(2);
       const header = [

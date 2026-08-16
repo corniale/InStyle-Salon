@@ -5,7 +5,7 @@
 // Addressed as /clients/detail?id=… because the app is statically exported;
 // a dynamic segment would need every id known at build time.
 
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -30,6 +30,7 @@ interface VisitRow {
 
 interface LineRow {
   ticket_date: string;
+  branch_id: string;
   service_name: string;
   technician_name: string;
   qty: number;
@@ -86,7 +87,7 @@ function ClientDetail() {
         .limit(100),
       supabase
         .from("v_ticket_lines_active")
-        .select("ticket_date, service_name, technician_name, qty, total_cents, rating, payment_method")
+        .select("ticket_date, branch_id, service_name, technician_name, qty, total_cents, rating, payment_method")
         .eq("client_id", id)
         .order("ticket_date", { ascending: false })
         .limit(500),
@@ -113,11 +114,14 @@ function ClientDetail() {
 
   const { client, visits, lines, packages, retention } = q.data;
   const branchName = (bid: string) => branches.find((b) => b.id === bid)?.name ?? "";
+  // Keyed by date AND branch — a client can visit both branches on one day,
+  // and each visit row must show only its own branch's services.
   const linesByDate = new Map<string, LineRow[]>();
   for (const l of lines) {
-    const arr = linesByDate.get(l.ticket_date) ?? [];
+    const key = `${l.ticket_date}:${l.branch_id}`;
+    const arr = linesByDate.get(key) ?? [];
     arr.push(l);
-    linesByDate.set(l.ticket_date, arr);
+    linesByDate.set(key, arr);
   }
 
   if (client.merged_into_id) {
@@ -483,7 +487,7 @@ function VisitHistoryTable({ visits, linesByDate, branchName }: {
   branchName: (bid: string) => string;
 }) {
   const enriched = useMemo(() => visits.map((v): VisitTableRow => {
-    const vl = linesByDate.get(v.visit_date) ?? [];
+    const vl = linesByDate.get(`${v.visit_date}:${v.branch_id}`) ?? [];
     const rated = vl.filter((l) => l.rating != null);
     return {
       v,
@@ -518,7 +522,7 @@ function VisitHistoryTable({ visits, linesByDate, branchName }: {
       </thead>
       <tbody>
         {rows.map(({ v, branch, services, techs, rating, paid }) => (
-          <tr key={v.visit_date}>
+          <tr key={`${v.visit_date}:${v.branch_id}`}>
             <Td className="tnum">{v.visit_date}</Td>
             <Td>{branch}</Td>
             <Td><Truncate text={services || "—"} max={44} /></Td>
@@ -678,10 +682,14 @@ function MergeModal({ open, loser, onClose, onDone }: {
   const [winner, setWinner] = useState<Client | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Merge picks a winner from this list, so a slow response for an earlier
+  // term must never overwrite results for what is currently typed.
+  const lookupSeq = useRef(0);
 
   async function lookup(value: string) {
     setSearch(value);
     setWinner(null);
+    const seq = ++lookupSeq.current;
     if (value.trim().length < 2) {
       setCandidates([]);
       return;
@@ -696,6 +704,7 @@ function MergeModal({ open, loser, onClose, onDone }: {
     const { data } = /^\d+$/.test(value.trim())
       ? await query.like("phone", `%${value.trim()}%`)
       : await query.ilike("full_name", `%${value.trim()}%`);
+    if (seq !== lookupSeq.current) return;
     setCandidates((data ?? []) as Client[]);
   }
 

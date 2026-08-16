@@ -6,7 +6,7 @@
 // answered the spec's open question 4: May's sales were fully recorded —
 // it was the client names that went missing that month.
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
@@ -609,14 +609,19 @@ const AT_RISK_ACC: Record<string, (r: AtRiskRow) => unknown> = {
 
 function AtRiskList({ branchId }: { branchId: string | null }) {
   const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [branchId]);
 
+  // Fetch the whole list once (it is a call list, realistically a few
+  // hundred rows) so the sortable headers order the full set, not just the
+  // visible page. Display still pages at 25.
   const q = useQuery(async () => {
     const res = await createClient().rpc("f_at_risk_clients", {
-      p_branch: branchId, p_limit: AT_RISK_PAGE, p_offset: page * AT_RISK_PAGE,
+      p_branch: branchId, p_limit: 1000, p_offset: 0,
     });
     return unwrap(res) as AtRiskRow[];
-  }, [branchId, page]);
+  }, [branchId]);
   const { rows, th } = useSort(q.status === "ready" ? q.data : null, AT_RISK_ACC);
+  const pagedRows = rows?.slice(page * AT_RISK_PAGE, page * AT_RISK_PAGE + AT_RISK_PAGE) ?? null;
 
   return (
     <Card title="Clients going quiet">
@@ -647,7 +652,7 @@ function AtRiskList({ branchId }: { branchId: string | null }) {
               </tr>
             </thead>
             <tbody>
-              {(rows ?? []).map((r) => (
+              {(pagedRows ?? []).map((r) => (
                 <tr key={r.client_id}>
                   <Td>
                     <Link href={`/clients/detail?id=${r.client_id}`} className="font-bold hover:underline">
@@ -671,7 +676,7 @@ function AtRiskList({ branchId }: { branchId: string | null }) {
           </Table>
           <Pagination
             page={page}
-            total={q.data[0]?.total_count ?? q.data.length}
+            total={q.data.length}
             onPage={setPage}
             noun="clients"
             pageSize={AT_RISK_PAGE}

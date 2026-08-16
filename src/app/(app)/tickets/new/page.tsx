@@ -190,6 +190,12 @@ function NewTicketForm() {
     setBarangay("");
     setPhone("");
     setPhoneDeclined(false);
+    // The departing client takes their standing discount (and any package
+    // redemption) with them — the next client must not inherit either.
+    setLines((ls) => ls.map((l) =>
+      l.discount_type === "special" || l.discount_type === "package" || l.package_id !== ""
+        ? { ...l, discount_type: "" as const, discountInput: "", package_id: "" }
+        : l));
   }
 
   // Directory search: a name shows every match with the number beside it;
@@ -200,6 +206,7 @@ function NewTicketForm() {
       setSearchResults([]);
       return;
     }
+    let alive = true;
     const handle = setTimeout(() => {
       void (async () => {
         let query = createClient()
@@ -213,10 +220,15 @@ function NewTicketForm() {
           ? query.like("phone", `%${term.replace(/\D/g, "")}%`)
           : query.ilike("full_name", `%${term}%`);
         const { data } = await query;
-        setSearchResults((data ?? []) as Client[]);
+        // A slow response for an earlier term must not overwrite the
+        // dropdown after the user typed more or picked a client.
+        if (alive) setSearchResults((data ?? []) as Client[]);
       })();
     }, 250);
-    return () => clearTimeout(handle);
+    return () => {
+      alive = false;
+      clearTimeout(handle);
+    };
   }, [clientSearch, selected]);
 
   // Exact-phone lookup still works (edge case 2: surface, offer, reuse).
@@ -257,6 +269,10 @@ function NewTicketForm() {
   const [remarks, setRemarks] = useState("");
   const [loadedSeries, setLoadedSeries] = useState<string | null>(null);
   const prefilled = useRef(false);
+  // Resume/revise must never show an empty form because the load failed —
+  // billing a silently-empty form would replace the ticket's real lines.
+  const [prefillState, setPrefillState] = useState<"pending" | "ready" | "error">("pending");
+  const [prefillNonce, setPrefillNonce] = useState(0);
 
   // Park/resume/revise need a live connection (shared state, no queueing);
   // the buttons disable themselves offline and teach the paper-slip fallback.
@@ -277,12 +293,17 @@ function NewTicketForm() {
     if (!loadId || prefilled.current) return;
     prefilled.current = true;
     void (async () => {
-      const { data } = await createClient()
+      const { data, error } = await createClient()
         .from("tickets")
         .select("*, clients(*), ticket_lines(*), ticket_payments(*)")
         .eq("id", loadId)
         .maybeSingle();
-      if (!data) return;
+      if (error || !data) {
+        prefilled.current = false;
+        setPrefillState("error");
+        return;
+      }
+      setPrefillState("ready");
       const t = data as unknown as {
         branch_id: string; ticket_date: string; series_no: string | null;
         is_new_client: boolean; voided_at: string | null;
@@ -337,7 +358,7 @@ function NewTicketForm() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadId]);
+  }, [loadId, prefillNonce]);
 
   // Warn before navigating away from unsaved work (spec §6).
   useEffect(() => {
@@ -357,25 +378,44 @@ function NewTicketForm() {
   function pickService(key: number, serviceId: string) {
     const price = priceBook.get(serviceId);
     const sp = matched?.special_discount_pct;
-    updateLine(key, {
-      service_id: serviceId,
-      priceInput: price ? String(price.price_cents / 100) : "",
-      // A client-level discount rides onto every service automatically.
-      ...(sp != null
-        ? { discount_type: "special" as const, discountInput: String(Number(sp)) }
-        : {}),
-    });
+    markDirty();
+    setLines((ls) => ls.map((l) => {
+      if (l.key !== key) return l;
+      const next: LineDraft = {
+        ...l,
+        service_id: serviceId,
+        priceInput: price ? String(price.price_cents / 100) : "",
+        // A redemption belongs to the service it was chosen for — changing
+        // the service must not burn a session of the old service's package.
+        package_id: "",
+      };
+      if (l.discount_type === "package") {
+        next.discount_type = "";
+        next.discountInput = "";
+      }
+      // The client-level discount rides on automatically, but only where no
+      // discount was chosen — a deliberate Senior/PWD pick stays.
+      if (sp != null && next.discount_type === "" && next.discountInput === "") {
+        next.discount_type = "special";
+        next.discountInput = String(Number(sp));
+      }
+      return next;
+    }));
   }
 
   // If the client match lands after services were already picked, carry the
-  // standing discount onto lines that have none yet.
+  // standing discount onto lines that have none yet. Skipped on resume and
+  // revise: the prefilled lines show what was actually agreed, including a
+  // discount someone deliberately removed.
   useEffect(() => {
+    if (loadId) return;
     const sp = matched?.special_discount_pct;
     if (sp == null) return;
     setLines((ls) => ls.map((l) =>
       l.service_id !== "" && l.discount_type === "" && l.discountInput === ""
         ? { ...l, discount_type: "special" as const, discountInput: String(Number(sp)) }
         : l));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matched]);
 
   // ---- derived totals -----------------------------------------------------
@@ -423,13 +463,29 @@ function NewTicketForm() {
       if (!Number.isFinite(pct) || pct < 0 || pct > 100)
         e[`line-${l.key}-discount`] = "Discount must be 0 to 100 percent.";
       if (l.qty < 1) e[`line-${l.key}-qty`] = "Quantity must be at least 1.";
-      if (l.startedAt && l.endedAt && l.endedAt < l.startedAt)
-        e[`line-${l.key}-time`] = "Time ended is before time started.";
+      if (l.startedAt && l.endedAt && l.endedAt <= l.startedAt)
+        e[`line-${l.key}-time`] = "Time ended must be after time started.";
       void i;
     });
 
+    payments.forEach((p) => {
+      if ((parsePesos(p.amountInput || "0") ?? 0) < 0)
+        e.payments = "Payment amounts cannot be negative.";
+    });
     if (needPayments && paymentTotal !== ticketTotal)
       e.payments = `Payments come to ${formatCentavos(paymentTotal)} but the ticket totals ${formatCentavos(ticketTotal)}.`;
+    if (!needPayments && paymentTotal > 0)
+      e.payments =
+        "Payments are settled at billing — remove the amount before parking, or bill the ticket now.";
+    if (!needPayments) {
+      // A parked ticket cannot hold a redemption — the session is only
+      // burned at billing, so a parked one would silently vanish.
+      lines.forEach((l) => {
+        if (l.package_id !== "")
+          e[`line-${l.key}-discount`] =
+            "Package redemptions apply at billing — remove it for now and pick the package again when billing.";
+      });
+    }
 
     if (reviseId && remarks.trim() === "")
       e.remarks = "Remarks are required — say why this ticket is being revised.";
@@ -438,9 +494,16 @@ function NewTicketForm() {
     return Object.keys(e).length === 0;
   }
 
-  function buildPayload(): TicketPayload {
+  function buildPayload(action: "save" | "park" | "keepopen"): TicketPayload {
+    // The key is scoped per action: a Park whose response was lost must not
+    // let a later "Save ticket" dedupe into the parked (unpaid) ticket and
+    // report it as billed.
+    const birthday =
+      birthMonth !== "" && birthDay !== ""
+        ? { birth_month: Number(birthMonth), birth_day: Number(birthDay) }
+        : {};
     return {
-      idempotency_key: idemKey.current,
+      idempotency_key: `${idemKey.current}:${action === "park" ? "park" : "save"}`,
       branch_id: formBranchId,
       ticket_date: ticketDate,
       client: matched
@@ -453,6 +516,9 @@ function NewTicketForm() {
               town: town.trim() || undefined,
               barangay: barangay.trim() || undefined,
               inquiry_source: inquirySource.trim() || undefined,
+              // A birthday heard at the register is kept even for a
+              // first-visit client, not only for existing records.
+              ...birthday,
             },
       is_new_client: isNewClient,
       lines: lines.map((l) => {
@@ -492,7 +558,7 @@ function NewTicketForm() {
     if (!validate(action === "save")) return;
     setBusy(true);
 
-    const payload = buildPayload();
+    const payload = buildPayload(action);
     const clientLabel = clientName.trim() || (phoneDeclined ? "Walk-in" : phone);
     const queueable = action === "save" && !reviseId && !resumeId;
 
@@ -588,6 +654,28 @@ function NewTicketForm() {
           message="The service list did not load, so a ticket cannot be entered yet."
           onRetry={ref.retry}
         />
+      </div>
+    );
+  }
+  if (loadId && prefillState === "error") {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-[20px] font-bold">{pageTitle}</h1>
+        <ErrorState
+          message="This ticket did not load. Nothing has changed — retry before making any edits."
+          onRetry={() => {
+            setPrefillState("pending");
+            setPrefillNonce((n) => n + 1);
+          }}
+        />
+      </div>
+    );
+  }
+  if (loadId && prefillState !== "ready") {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-[20px] font-bold">{pageTitle}</h1>
+        <Card><SkeletonRows rows={6} cols={4} /></Card>
       </div>
     );
   }

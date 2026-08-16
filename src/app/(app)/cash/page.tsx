@@ -64,21 +64,32 @@ export default function CashPage() {
   const shown = branchId ? branches.filter((b) => b.id === branchId) : branches;
   const single = period.from === period.to;
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(false);
 
   // One row per branch-day, every statement line as a column — the same
-  // math the cards show, ready for a spreadsheet.
+  // math the cards show, ready for a spreadsheet. Paged past the 1,000-row
+  // response cap (a large .limit() would be clamped to it server-side).
   async function exportCsv() {
     setExporting(true);
+    setExportError(false);
     try {
-      const res = await createClient()
-        .from("v_daily_cash")
-        .select("*")
-        .in("branch_id", shown.map((b) => b.id))
-        .gte("business_date", period.from)
-        .lte("business_date", period.to)
-        .order("business_date", { ascending: true })
-        .limit(5000);
-      const days = unwrap(res) as DailyCashRow[];
+      const supabase = createClient();
+      const PAGE = 1000;
+      const days: DailyCashRow[] = [];
+      for (let offset = 0; ; offset += PAGE) {
+        const res = await supabase
+          .from("v_daily_cash")
+          .select("*")
+          .in("branch_id", shown.map((b) => b.id))
+          .gte("business_date", period.from)
+          .lte("business_date", period.to)
+          .order("business_date", { ascending: true })
+          .order("branch_id", { ascending: true })
+          .range(offset, offset + PAGE - 1);
+        const chunk = unwrap(res) as DailyCashRow[];
+        days.push(...chunk);
+        if (chunk.length < PAGE) break;
+      }
       const name = new Map(shown.map((b) => [b.id, b.name]));
       downloadCsv(
         `daily-cash-${period.from}-to-${period.to}.csv`,
@@ -107,6 +118,8 @@ export default function CashPage() {
           d.closed_at != null ? "yes" : "",
         ]),
       );
+    } catch {
+      setExportError(true);
     } finally {
       setExporting(false);
     }
@@ -119,9 +132,14 @@ export default function CashPage() {
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <PeriodPicker value={period} onChange={setPeriod} />
           {isAdminUp && (
-            <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
-              Export CSV
-            </Button>
+            <>
+              {exportError && (
+                <span className="text-[11px] text-brand-red">Export failed — try again.</span>
+              )}
+              <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
+                Export CSV
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -185,38 +203,54 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
   const { isManagerUp } = useSession();
   const [closeOpen, setCloseOpen] = useState(false);
   const [reopenBusy, setReopenBusy] = useState(false);
+  const [reopenError, setReopenError] = useState(false);
 
   const q = useQuery(async () => {
     const supabase = createClient();
-    const [days, expenses] = await Promise.all([
-      supabase
-        .from("v_daily_cash")
-        .select("*")
-        .eq("branch_id", branchId)
-        .gte("business_date", from)
-        .lte("business_date", to)
-        .order("business_date", { ascending: true }),
-      supabase
+    const daysReq = supabase
+      .from("v_daily_cash")
+      .select("*")
+      .eq("branch_id", branchId)
+      .gte("business_date", from)
+      .lte("business_date", to)
+      .order("business_date", { ascending: true });
+    // A YTD period can exceed the 1,000-row response cap, and the card's
+    // Total sums every row — page through so nothing is silently dropped.
+    const PAGE = 1000;
+    const expenses: ExpenseRow[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const res = await supabase
         .from("expenses")
         .select("id, spent_on, category, amount_cents, description, paid_from")
         .eq("branch_id", branchId)
         .gte("spent_on", from)
         .lte("spent_on", to)
         .order("spent_on", { ascending: false })
-        .order("created_at", { ascending: false }),
-    ]);
-    const rows = unwrap(days) as DailyCashRow[];
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      const chunk = unwrap(res) as ExpenseRow[];
+      expenses.push(...chunk);
+      if (chunk.length < PAGE) break;
+    }
+    const rows = unwrap(await daysReq) as DailyCashRow[];
     return {
       day: single ? (rows[0] ?? null) : aggregateDays(rows),
       dayCount: rows.length,
-      expenses: unwrap(expenses) as ExpenseRow[],
+      expenses,
     };
   }, [branchId, from, to, single]);
 
   async function reopen() {
     setReopenBusy(true);
-    await createClient().rpc("reopen_cash_day", { p_branch: branchId, p_date: from });
+    setReopenError(false);
+    const { error } = await createClient()
+      .rpc("reopen_cash_day", { p_branch: branchId, p_date: from });
     setReopenBusy(false);
+    if (error) {
+      setReopenError(true);
+      return;
+    }
     q.retry();
   }
 
@@ -321,9 +355,16 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
               </div>
               {single && (closed ? (
                 isManagerUp && (
-                  <Button busy={reopenBusy} busyLabel="Reopening" onClick={() => void reopen()}>
-                    Reopen day
-                  </Button>
+                  <span className="flex items-center gap-2">
+                    {reopenError && (
+                      <span className="text-[11px] text-brand-red">
+                        The day did not reopen. Try again.
+                      </span>
+                    )}
+                    <Button busy={reopenBusy} busyLabel="Reopening" onClick={() => void reopen()}>
+                      Reopen day
+                    </Button>
+                  </span>
                 )
               ) : (
                 <Button variant="primary" onClick={() => setCloseOpen(true)}>
@@ -432,8 +473,7 @@ function StmtRow({ label, cents, negative, bold, top }: {
     <div className={`flex items-baseline justify-between gap-4${top ? " border-t border-border pt-1" : ""}`}>
       <span className={bold ? "font-bold" : "text-text-muted"}>{label}</span>
       <span className={`tnum${bold ? " font-bold" : ""}`}>
-        {negative && cents !== 0 ? "−" : ""}
-        {formatCentavos(cents)}
+        {formatCentavos(negative && cents !== 0 ? -cents : cents)}
       </span>
     </div>
   );
@@ -726,6 +766,9 @@ function TechnicianEarningsCard({ branchId, from, to }: {
         .eq("branch_id", branchId)
         .gte("ticket_date", from)
         .lte("ticket_date", to)
+        // Date first: new lines land on today (the last pages), so rows a
+        // concurrent save inserts can't shift already-fetched pages.
+        .order("ticket_date", { ascending: true })
         .order("line_id", { ascending: true })
         .range(offset, offset + PAGE - 1);
       const chunk = unwrap(res) as typeof lines;

@@ -4,7 +4,14 @@
 
 export function csvCell(v: string | number | boolean | null | undefined): string {
   if (v == null) return "";
-  const t = String(v);
+  let t = String(v);
+  // Formula injection guard: free-text fields (client names, remarks) end up
+  // in Excel, which executes cells starting with = + - @. A leading
+  // apostrophe makes Excel treat the cell as text. Plain numbers (including
+  // negative money from csvPesos) are exempt — they are data, not formulas.
+  if (typeof v === "string" && /^[=+\-@]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) {
+    t = `'${t}`;
+  }
   return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
 }
 

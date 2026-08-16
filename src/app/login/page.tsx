@@ -5,6 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button, Field, Input } from "@/components/ui";
 
+/** Only same-site paths — a full URL in ?next= would let a crafted link
+ *  bounce someone to an attacker's page right after a genuine sign-in. */
+function safeNext(next: string | null): string {
+  return next && /^\/(?!\/)/.test(next) ? next : "/";
+}
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
@@ -19,7 +25,7 @@ function LoginForm() {
     void createClient()
       .auth.getUser()
       .then(({ data: { user } }) => {
-        if (user) router.replace(params.get("next") ?? "/");
+        if (user) router.replace(safeNext(params.get("next")));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -42,7 +48,7 @@ function LoginForm() {
       return;
     }
 
-    router.replace(params.get("next") ?? "/");
+    router.replace(safeNext(params.get("next")));
     router.refresh();
   }
 

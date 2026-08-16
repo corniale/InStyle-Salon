@@ -99,9 +99,11 @@ function ExportDetailButton({ branchId, from, to }: {
   to: string;
 }) {
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   async function run() {
     setBusy(true);
+    setFailed(false);
     try {
       const supabase = createClient();
       const PAGE = 1000;
@@ -112,6 +114,9 @@ function ExportDetailButton({ branchId, from, to }: {
           .select("line_id, ticket_date, branch_code, service_type_name, service_name, technician_name, qty, unit_price_cents, discount_type, discount_cents, total_cents, company_share_cents, technician_share_cents, payment_method, is_new_client, is_upsell, attributed_minutes")
           .gte("ticket_date", from)
           .lte("ticket_date", to)
+          // Date first: new lines land on today (the last pages), so rows a
+          // concurrent save inserts can't shift already-fetched pages.
+          .order("ticket_date", { ascending: true })
           .order("line_id", { ascending: true })
           .range(offset, offset + PAGE - 1);
         if (branchId) query = query.eq("branch_id", branchId);
@@ -134,15 +139,22 @@ function ExportDetailButton({ branchId, from, to }: {
           l.is_upsell ? "yes" : "", l.attributed_minutes,
         ]),
       );
+    } catch {
+      setFailed(true);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Button busy={busy} busyLabel="Exporting" onClick={() => void run()}>
-      Export detail CSV
-    </Button>
+    <span className="flex items-center gap-2">
+      {failed && (
+        <span className="text-[11px] text-brand-red">Export failed — try again.</span>
+      )}
+      <Button busy={busy} busyLabel="Exporting" onClick={() => void run()}>
+        Export detail CSV
+      </Button>
+    </span>
   );
 }
 

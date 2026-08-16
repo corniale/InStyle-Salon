@@ -551,5 +551,149 @@ begin
   if j is null then raise exception 'data quality query failed'; end if;
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- 0027 hardening: balance invariant, parked tickets and the drawer,
+-- closed-day record immutability, merge-on-history, idempotent revision
+-- ---------------------------------------------------------------------------
+
+do $$
+declare v_main uuid; v_res jsonb; v_before bigint; v_ticket uuid;
+        v_orig uuid; v_payload jsonb; v1 jsonb; v2 jsonb;
+        v_loser uuid; v_winner uuid;
+begin
+  select id into v_main from public.branches where code = 'MAIN';
+
+  -- Parked tickets must not move the drawer expectation.
+  v_before := expected_cash(v_main, business_date());
+  v_res := open_ticket(jsonb_build_object(
+    'idempotency_key', 'test-hard-1',
+    'branch_id', v_main,
+    'client', jsonb_build_object('phone', '09170009998'),
+    'lines', jsonb_build_array(jsonb_build_object(
+      'service_id', (select id from public.services where name = 'Manicure'),
+      'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+      'qty', 1, 'unit_price_cents', 100000, 'sharing_rate', 0.500))));
+  v_ticket := (v_res ->> 'ticket_id')::uuid;
+  if expected_cash(v_main, business_date()) <> v_before then
+    raise exception 'parked ticket moved expected_cash';
+  end if;
+
+  -- Closing a ticket by raw update with no payments must fail at commit.
+  begin
+    update public.tickets set status = 'closed' where id = v_ticket;
+    set constraints all immediate;
+    raise exception 'unpaid raw close was allowed';
+  exception when check_violation then null;
+  end;
+  if (select status from public.tickets where id = v_ticket) <> 'open' then
+    raise exception 'failed raw close still stuck';
+  end if;
+
+  -- Bill it properly; the balance check passes.
+  v_res := save_open_ticket(v_ticket, jsonb_build_object(
+    'lines', jsonb_build_array(jsonb_build_object(
+      'service_id', (select id from public.services where name = 'Manicure'),
+      'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+      'qty', 1, 'unit_price_cents', 100000, 'sharing_rate', 0.500)),
+    'payments', jsonb_build_array(
+      jsonb_build_object('method', 'cash', 'amount_cents', 100000))), true);
+  if (v_res ->> 'status') <> 'closed' then raise exception 'billing failed'; end if;
+
+  -- Slipping an extra payment into a billed ticket must fail at commit.
+  begin
+    insert into public.ticket_payments (ticket_id, method, amount_cents)
+    values (v_ticket, 'cash', 12345);
+    set constraints all immediate;
+    raise exception 'extra payment on billed ticket was allowed';
+  exception when check_violation then null;
+  end;
+
+  -- revise_ticket: replacement keeps is_new_client, replay is idempotent.
+  v_payload := jsonb_build_object(
+    'idempotency_key', 'test-hard-rev-orig',
+    'branch_id', v_main,
+    'client', jsonb_build_object('phone', '09170009997'),
+    'lines', jsonb_build_array(jsonb_build_object(
+      'service_id', (select id from public.services where name = 'Manicure'),
+      'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+      'qty', 1, 'unit_price_cents', 40000, 'sharing_rate', 0.500)));
+  v_orig := (create_ticket(v_payload) ->> 'ticket_id')::uuid;
+  if not (select is_new_client from public.tickets where id = v_orig) then
+    raise exception 'setup: original should be a first visit';
+  end if;
+
+  v_payload := v_payload || jsonb_build_object('idempotency_key', 'test-hard-rev-new');
+  v1 := revise_ticket(v_orig, 'price typo', v_payload);
+  v2 := revise_ticket(v_orig, 'price typo', v_payload); -- lost-response replay
+  if (v1 ->> 'ticket_id') <> (v2 ->> 'ticket_id') then
+    raise exception 'revision replay returned a different ticket';
+  end if;
+  if not (select is_new_client from public.tickets where id = (v1 ->> 'ticket_id')::uuid) then
+    raise exception 'revision lost the first-visit flag';
+  end if;
+
+  -- Close the day: its reconciliation record becomes read-only.
+  v_res := close_cash_day(v_main, business_date(), 0, 'hardening test close');
+  begin
+    update public.cash_days set counted_cash_cents = 999999
+    where branch_id = v_main and business_date = business_date();
+    raise exception 'closed day record was editable';
+  exception when check_violation then null;
+  end;
+
+  -- Merging clients with history on the closed day still works.
+  select client_id into v_loser from public.tickets
+  where branch_id = v_main and ticket_date = business_date()
+    and client_id is not null limit 1;
+  select id into v_winner from public.clients
+  where id <> v_loser and merged_into_id is null and not is_pool limit 1;
+  v_res := merge_clients(v_loser, v_winner);
+  if (v_res ->> 'tickets_moved')::int < 1 then
+    raise exception 'merge on closed-day history moved no tickets';
+  end if;
+
+  -- But a real financial edit on the closed day is still refused.
+  begin
+    insert into public.expenses (branch_id, spent_on, category, amount_cents, recorded_by)
+    values (v_main, business_date(), 'supplies', 100, auth.uid());
+    raise exception 'closed day accepted an expense after hardening';
+  exception when check_violation then null;
+  end;
+end $$;
+
+-- Admin role wiring: an invited admin keeps the role, roams branchless,
+-- and may reopen a closed day.
+reset role;
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-000000000004', 'alex@instyle.ph',
+   jsonb_build_object('role', 'admin', 'full_name', 'Alex Reyes'));
+
+do $$
+begin
+  if (select role from public.profiles where id = '00000000-0000-0000-0000-000000000004')
+     <> 'admin' then
+    raise exception 'admin invite was demoted';
+  end if;
+  if (select branch_id from public.profiles where id = '00000000-0000-0000-0000-000000000004')
+     is not null then
+    raise exception 'admin should be branchless';
+  end if;
+end $$;
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000004', false);
+
+do $$
+declare v_main uuid;
+begin
+  select id into v_main from public.branches where code = 'MAIN';
+  perform reopen_cash_day(v_main, business_date());
+  if exists (select 1 from public.cash_days
+             where branch_id = v_main and business_date = business_date()
+               and closed_at is not null) then
+    raise exception 'admin reopen did not stick';
+  end if;
+end $$;
+
 reset role;
 select 'behaviour suite passed' as result;
