@@ -198,15 +198,17 @@ function PeakPeriods({ branchId }: { branchId: string | null }) {
       )}
       {q.status === "ready" && (
         <>
-          {mode === "month" && <MonthDowHeatmap rows={q.data} />}
-          {mode === "dow" && (
+          {mode === "month" && (
             <HeatStrip
-              cells={PEAK_DAYS.map((label, i) => ({
+              cells={PEAK_MONTHS.map((label, i) => ({
                 label,
-                value: q.data.find((r) => r.dim === "dow" && r.bucket === i + 1)?.tickets ?? 0,
+                value: q.data
+                  .filter((r) => r.dim === "month_dow" && r.bucket === i + 1)
+                  .reduce((s, r) => s + r.tickets, 0),
               }))}
             />
           )}
+          {mode === "dow" && <MonthDowHeatmap rows={q.data} />}
           {mode === "hour" && <HourStrip rows={q.data} />}
         </>
       )}
@@ -216,40 +218,56 @@ function PeakPeriods({ branchId }: { branchId: string | null }) {
 
 function MonthDowHeatmap({ rows }: { rows: PeakRow[] }) {
   const cell = new Map<string, number>();
+  const rowTotal = new Map<number, number>();
   let max = 0;
   for (const r of rows) {
     if (r.dim !== "month_dow" || r.dow == null) continue;
     cell.set(`${r.bucket}:${r.dow}`, r.tickets);
+    rowTotal.set(r.dow, (rowTotal.get(r.dow) ?? 0) + r.tickets);
     max = Math.max(max, r.tickets);
   }
+  // Totals live on their own scale — a year's sum would wash out the
+  // monthly cells if they shared one.
+  const maxTotal = Math.max(...rowTotal.values(), 0);
   return (
     <div className="overflow-x-auto">
-      <div className="grid min-w-[640px] gap-px"
-        style={{ gridTemplateColumns: "44px repeat(12, 1fr)" }}>
+      <div className="grid min-w-[700px] gap-px"
+        style={{ gridTemplateColumns: "44px repeat(12, 1fr) 64px" }}>
         <div />
         {PEAK_MONTHS.map((m) => (
           <div key={m} className="pb-1 text-center text-[11px] font-bold text-text-muted">{m}</div>
         ))}
-        {PEAK_DAYS.map((day, di) => (
-          <Fragment key={day}>
-            <div className="flex items-center text-[11px] font-bold text-text-muted">
-              {day}
-            </div>
-            {PEAK_MONTHS.map((_, mi) => {
-              const v = cell.get(`${mi + 1}:${di + 1}`) ?? 0;
-              return (
-                <div
-                  key={`${day}-${mi}`}
-                  title={`${day} in ${PEAK_MONTHS[mi]}: ${v.toLocaleString()} tickets`}
-                  className="flex h-9 items-center justify-center rounded-[2px] border border-border text-[11px] tnum"
-                  style={{ backgroundColor: heatColor(v, max) }}
-                >
-                  {v > 0 ? v : ""}
-                </div>
-              );
-            })}
-          </Fragment>
-        ))}
+        <div className="pb-1 text-center text-[11px] font-bold">Total</div>
+        {PEAK_DAYS.map((day, di) => {
+          const total = rowTotal.get(di + 1) ?? 0;
+          return (
+            <Fragment key={day}>
+              <div className="flex items-center text-[11px] font-bold text-text-muted">
+                {day}
+              </div>
+              {PEAK_MONTHS.map((_, mi) => {
+                const v = cell.get(`${mi + 1}:${di + 1}`) ?? 0;
+                return (
+                  <div
+                    key={`${day}-${mi}`}
+                    title={`${day} in ${PEAK_MONTHS[mi]}: ${v.toLocaleString()} tickets`}
+                    className="flex h-9 items-center justify-center rounded-[2px] border border-border text-[11px] tnum"
+                    style={{ backgroundColor: heatColor(v, max) }}
+                  >
+                    {v > 0 ? v : ""}
+                  </div>
+                );
+              })}
+              <div
+                title={`${day}, whole period: ${total.toLocaleString()} tickets`}
+                className="ml-1 flex h-9 items-center justify-center rounded-[2px] border border-border text-[11px] font-bold tnum"
+                style={{ backgroundColor: heatColor(total, maxTotal) }}
+              >
+                {total > 0 ? total.toLocaleString() : ""}
+              </div>
+            </Fragment>
+          );
+        })}
       </div>
     </div>
   );
