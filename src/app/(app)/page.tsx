@@ -12,9 +12,10 @@ import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
-import { Card, ErrorState, SkeletonRows, SkeletonStat, Stat } from "@/components/ui";
+import { Button, Card, ErrorState, SkeletonRows, SkeletonStat, Stat } from "@/components/ui";
 import { BarList, LineChart } from "@/components/charts";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
+import { csvPesos, downloadCsv } from "@/lib/csv";
 
 export default function DashboardPage() {
   const { branchId, canSeeAnalytics } = useSession();
@@ -41,7 +42,10 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Dashboard</h1>
-        <PeriodPicker value={period} onChange={setPeriod} withPastMonths />
+        <div className="flex flex-wrap items-center gap-2">
+          <PeriodPicker value={period} onChange={setPeriod} withPastMonths />
+          <ExportDetailButton branchId={branchId} from={from} to={to} />
+        </div>
       </div>
 
       <SummaryTiles branchId={branchId} from={from} to={to} />
@@ -60,6 +64,85 @@ export default function DashboardPage() {
 
       <PriceDivergenceTile />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Every service line behind the dashboard's numbers, one CSV row each —
+// price, discount, shares, payment, technician — so any tile's figure can
+// be recomputed in a spreadsheet. Paged past the 1,000-row response cap.
+// ---------------------------------------------------------------------------
+
+interface DetailLine {
+  line_id: string;
+  ticket_date: string;
+  branch_code: string;
+  service_type_name: string;
+  service_name: string;
+  technician_name: string;
+  qty: number;
+  unit_price_cents: number;
+  discount_type: string | null;
+  discount_cents: number;
+  total_cents: number;
+  company_share_cents: number;
+  technician_share_cents: number;
+  payment_method: string;
+  is_new_client: boolean;
+  is_upsell: boolean;
+  attributed_minutes: number | null;
+}
+
+function ExportDetailButton({ branchId, from, to }: {
+  branchId: string | null;
+  from: string;
+  to: string;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true);
+    try {
+      const supabase = createClient();
+      const PAGE = 1000;
+      const all: DetailLine[] = [];
+      for (let offset = 0; ; offset += PAGE) {
+        let query = supabase
+          .from("v_ticket_lines_active")
+          .select("line_id, ticket_date, branch_code, service_type_name, service_name, technician_name, qty, unit_price_cents, discount_type, discount_cents, total_cents, company_share_cents, technician_share_cents, payment_method, is_new_client, is_upsell, attributed_minutes")
+          .gte("ticket_date", from)
+          .lte("ticket_date", to)
+          .order("line_id", { ascending: true })
+          .range(offset, offset + PAGE - 1);
+        if (branchId) query = query.eq("branch_id", branchId);
+        const chunk = unwrap(await query) as DetailLine[];
+        all.push(...chunk);
+        if (chunk.length < PAGE) break;
+      }
+      downloadCsv(
+        `sales-detail-${from}-to-${to}.csv`,
+        ["Date", "Branch", "Service type", "Service", "Technician", "Qty",
+         "Unit price", "Discount type", "Discount", "Line total",
+         "Company share", "Technician share", "Payment", "New client",
+         "Upsell", "Minutes"],
+        all.map((l) => [
+          l.ticket_date, l.branch_code, l.service_type_name, l.service_name,
+          l.technician_name, l.qty, csvPesos(l.unit_price_cents),
+          l.discount_type, csvPesos(l.discount_cents), csvPesos(l.total_cents),
+          csvPesos(l.company_share_cents), csvPesos(l.technician_share_cents),
+          l.payment_method, l.is_new_client ? "yes" : "",
+          l.is_upsell ? "yes" : "", l.attributed_minutes,
+        ]),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button busy={busy} busyLabel="Exporting" onClick={() => void run()}>
+      Export detail CSV
+    </Button>
   );
 }
 

@@ -12,9 +12,10 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import {
-  Card, EmptyState, ErrorState, SkeletonRows, Table, Td, Th, Truncate, useSort,
+  Button, Card, EmptyState, ErrorState, SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
+import { csvPesos, downloadCsv } from "@/lib/csv";
 
 interface TechRow {
   technician_id: string;
@@ -60,11 +61,37 @@ export default function TechniciansPage() {
   const ranked = q.status === "ready" ? q.data.filter((t) => t.ranked) : [];
   const unranked = q.status === "ready" ? q.data.filter((t) => !t.ranked) : [];
 
+  function exportCsv() {
+    if (q.status !== "ready") return;
+    downloadCsv(
+      `technicians-${from}-to-${to}.csv`,
+      ["Technician", "Branch", "Tickets", "Lines", "Sales", "Company share",
+       "Actual margin %", "Expected margin %", "Margin vs expected (pts)",
+       "Distinct clients", "Repeat clients", "Client retention %",
+       "Upsell lines", "Upsell %", "Rating", "Rated %",
+       "Busy minutes", "Scheduled minutes", "Utilisation %", "Ranked"],
+      q.data.map((t) => [
+        t.technician_name, t.branch_code, t.tickets, t.lines,
+        csvPesos(t.revenue_cents), csvPesos(t.company_share_cents),
+        t.actual_margin_pct, t.expected_margin_pct, t.margin_vs_expected_pts,
+        t.distinct_clients, t.repeat_clients, t.client_retention_pct,
+        t.upsell_lines, t.upsell_pct, t.avg_rating, t.rated_pct,
+        t.busy_minutes, t.scheduled_minutes, t.utilisation_pct,
+        t.ranked ? "yes" : "",
+      ]),
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Technicians</h1>
-        <PeriodPicker value={period} onChange={setPeriod} withRange />
+        <div className="flex flex-wrap items-center gap-2">
+          <PeriodPicker value={period} onChange={setPeriod} withRange />
+          <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       <Card title="Ranking">

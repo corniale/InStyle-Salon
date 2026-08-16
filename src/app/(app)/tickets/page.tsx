@@ -14,6 +14,7 @@ import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, SkeletonRows,
   Table, Td, Th, Textarea, Truncate, useSort,
 } from "@/components/ui";
+import { csvPesos, downloadCsv } from "@/lib/csv";
 import { listQueue, removeFromQueue, type QueuedTicket } from "@/lib/offline/queue";
 import { drainQueue } from "@/lib/offline/sync";
 import { onQueueChanged } from "@/lib/offline/queue";
@@ -81,6 +82,30 @@ export default function TicketsPage() {
 
   const { rows, th } = useSort(q.status === "ready" ? q.data : null, TICKET_ACC);
 
+  function exportCsv() {
+    if (q.status !== "ready") return;
+    downloadCsv(
+      `tickets-${date}.csv`,
+      ["Ticket", "Date", "Client", "Phone", "Services", "Technicians", "Payment",
+       "Total", "Company share", "New client", "Voided", "Void reason"],
+      q.data.map((t) => [
+        t.series_no,
+        t.ticket_date,
+        clientLabel(t),
+        t.clients?.phone_declined ? "declined" : t.clients?.phone,
+        t.ticket_lines.map((l) =>
+          l.qty > 1 ? `${l.services?.name ?? "?"} ×${l.qty}` : (l.services?.name ?? "?")).join(", "),
+        [...new Set(t.ticket_lines.map((l) => l.technicians?.full_name ?? "?"))].join(", "),
+        PAYMENT_LABEL[t.payment_method] ?? t.payment_method,
+        csvPesos(t.ticket_lines.reduce((s, l) => s + l.total_cents, 0)),
+        csvPesos(t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0)),
+        t.is_new_client ? "yes" : "",
+        t.voided_at != null ? "yes" : "",
+        t.void_reason,
+      ]),
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -93,6 +118,9 @@ export default function TicketsPage() {
             className="w-40"
             aria-label="Ticket date"
           />
+          <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
+            Export CSV
+          </Button>
           <Link href="/tickets/new">
             <Button variant="primary">Add ticket</Button>
           </Link>

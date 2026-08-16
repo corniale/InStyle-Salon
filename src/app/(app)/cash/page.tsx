@@ -17,6 +17,7 @@ import {
   SkeletonRows, Stat, Table, Td, Th, Textarea, Truncate, useSort,
 } from "@/components/ui";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
+import { csvPesos, downloadCsv } from "@/lib/csv";
 
 interface DailyCashRow {
   branch_id: string;
@@ -61,12 +62,65 @@ export default function CashPage() {
   // drawer stays a single-day act.
   const shown = branchId ? branches.filter((b) => b.id === branchId) : branches;
   const single = period.from === period.to;
+  const [exporting, setExporting] = useState(false);
+
+  // One row per branch-day, every statement line as a column — the same
+  // math the cards show, ready for a spreadsheet.
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const res = await createClient()
+        .from("v_daily_cash")
+        .select("*")
+        .in("branch_id", shown.map((b) => b.id))
+        .gte("business_date", period.from)
+        .lte("business_date", period.to)
+        .order("business_date", { ascending: true })
+        .limit(5000);
+      const days = unwrap(res) as DailyCashRow[];
+      const name = new Map(shown.map((b) => [b.id, b.name]));
+      downloadCsv(
+        `daily-cash-${period.from}-to-${period.to}.csv`,
+        ["Branch", "Date", "Opening balance", "Gross sales", "Technician share",
+         "Company share", "Cash takings", "GCash", "Maya", "Bank/card",
+         "Package/comp", "Gift certificates", "Cash expenses & deductions",
+         "Discounts given", "Net cash to remit", "Counted", "Variance", "Closed"],
+        days.map((d) => [
+          name.get(d.branch_id) ?? d.branch_id,
+          d.business_date,
+          csvPesos(d.opening_float_cents),
+          csvPesos(d.gross_sales_cents),
+          csvPesos(d.technician_share_cents),
+          csvPesos(d.company_share_cents),
+          csvPesos(d.cash_takings_cents),
+          csvPesos(d.gcash_takings_cents),
+          csvPesos(d.maya_takings_cents),
+          csvPesos(d.bank_card_takings_cents),
+          csvPesos(d.package_comp_cents),
+          csvPesos(d.gift_cert_cents),
+          csvPesos(d.cash_expenses_cents),
+          csvPesos(d.discounts_cents),
+          csvPesos(d.expected_cash_cents),
+          csvPesos(d.counted_cash_cents),
+          csvPesos(d.variance_cents),
+          d.closed_at != null ? "yes" : "",
+        ]),
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Daily cash</h1>
-        <PeriodPicker value={period} onChange={setPeriod} />
+        <div className="flex flex-wrap items-center gap-2">
+          <PeriodPicker value={period} onChange={setPeriod} />
+          <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {shown.length === 0 && (
