@@ -337,6 +337,81 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- Open tickets: park, edit, blocked cash close, bill (0021)
+-- ---------------------------------------------------------------------------
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000003', false);
+
+do $$
+declare v_main uuid; v_res jsonb; v_ticket uuid;
+begin
+  select id into v_main from public.branches where code = 'MAIN';
+
+  -- Front desk parks a ticket: TS# assigned, nothing counted yet.
+  v_res := open_ticket(jsonb_build_object(
+    'idempotency_key', 'test-open-1',
+    'branch_id', v_main,
+    'client', jsonb_build_object('phone', '09171112222'),
+    'lines', jsonb_build_array(jsonb_build_object(
+      'service_id', (select id from public.services where name = 'Manicure'),
+      'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+      'qty', 1, 'unit_price_cents', 15000, 'sharing_rate', 0.500))));
+  v_ticket := (v_res ->> 'ticket_id')::uuid;
+
+  if (v_res ->> 'series_no') is null then raise exception 'open ticket got no series'; end if;
+  if exists (select 1 from public.v_ticket_lines_active where ticket_id = v_ticket) then
+    raise exception 'open ticket leaked into analytics';
+  end if;
+
+  -- Edit while open: replace with two lines, still open.
+  v_res := save_open_ticket(v_ticket, jsonb_build_object(
+    'lines', jsonb_build_array(
+      jsonb_build_object(
+        'service_id', (select id from public.services where name = 'Manicure'),
+        'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+        'qty', 1, 'unit_price_cents', 15000, 'sharing_rate', 0.500),
+      jsonb_build_object(
+        'service_id', (select id from public.services where name = 'Foot spa'),
+        'technician_id', (select id from public.technicians where full_name = 'Divine Ocampo'),
+        'qty', 1, 'unit_price_cents', 25000, 'sharing_rate', 0.500))), false);
+  if (v_res ->> 'status') <> 'open' then raise exception 'keep-open closed the ticket'; end if;
+
+  -- The cash day refuses to close while it stays open.
+  begin
+    perform close_cash_day(v_main, business_date(), 0, 'try');
+    raise exception 'cash day closed over an open ticket';
+  exception when check_violation then null;
+  end;
+
+  -- Front desk still cannot void, even an open ticket.
+  begin
+    perform void_ticket(v_ticket, 'should not work');
+    raise exception 'front desk voided an open ticket';
+  exception when no_data_found or insufficient_privilege then null;
+  end;
+
+  -- Bill and close: payments recorded, ticket enters analytics.
+  v_res := save_open_ticket(v_ticket, jsonb_build_object(
+    'lines', jsonb_build_array(
+      jsonb_build_object(
+        'service_id', (select id from public.services where name = 'Manicure'),
+        'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+        'qty', 1, 'unit_price_cents', 15000, 'sharing_rate', 0.500),
+      jsonb_build_object(
+        'service_id', (select id from public.services where name = 'Foot spa'),
+        'technician_id', (select id from public.technicians where full_name = 'Divine Ocampo'),
+        'qty', 1, 'unit_price_cents', 25000, 'sharing_rate', 0.500)),
+    'payments', jsonb_build_array(
+      jsonb_build_object('method', 'cash', 'amount_cents', 40000))), true);
+  if (v_res ->> 'status') <> 'closed' then raise exception 'billing did not close'; end if;
+  if (select count(*) from public.v_ticket_lines_active where ticket_id = v_ticket) <> 2 then
+    raise exception 'billed ticket missing from analytics';
+  end if;
+end $$;
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', false);
+
+-- ---------------------------------------------------------------------------
 -- Packages: exhaustion refused, void releases the session (edge case 10)
 -- ---------------------------------------------------------------------------
 

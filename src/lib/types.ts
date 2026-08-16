@@ -94,6 +94,8 @@ export type PaymentMethod =
 export interface Ticket {
   id: string;
   branch_id: string;
+  /** open = parked at the counter, not yet billed; counted nowhere. */
+  status: "open" | "closed";
   series_no: string | null;
   client_id: string;
   ticket_date: string;

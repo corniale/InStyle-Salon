@@ -74,9 +74,14 @@ export default function NewTicketPage() {
 
 function NewTicketForm() {
   const router = useRouter();
+  const sp = useSearchParams();
   // Revising an existing ticket (manager+): the form pre-fills from the
   // original; saving voids it and creates the correction in one act.
-  const reviseId = useSearchParams().get("revise");
+  const reviseId = sp.get("revise");
+  // Resuming an open (parked) ticket: same pre-fill, but saving edits the
+  // ticket in place — keep it open or bill & close it.
+  const resumeId = sp.get("resume");
+  const loadId = reviseId ?? resumeId;
   const { branchId, branches, profile } = useSession();
   // Front desk / manager: their branch. Owner on consolidated: default to
   // the first branch — a sale always happens somewhere — with the picker
@@ -250,18 +255,18 @@ function NewTicketForm() {
   const [dirty, setDirty] = useState(false);
   const idemKey = useRef<string>(crypto.randomUUID());
   const [remarks, setRemarks] = useState("");
-  const [reviseSeries, setReviseSeries] = useState<string | null>(null);
-  const revisePrefilled = useRef(false);
+  const [loadedSeries, setLoadedSeries] = useState<string | null>(null);
+  const prefilled = useRef(false);
 
-  // Pre-fill everything from the original ticket being revised.
+  // Pre-fill everything from the ticket being revised or resumed.
   useEffect(() => {
-    if (!reviseId || revisePrefilled.current) return;
-    revisePrefilled.current = true;
+    if (!loadId || prefilled.current) return;
+    prefilled.current = true;
     void (async () => {
       const { data } = await createClient()
         .from("tickets")
         .select("*, clients(*), ticket_lines(*), ticket_payments(*)")
-        .eq("id", reviseId)
+        .eq("id", loadId)
         .maybeSingle();
       if (!data) return;
       const t = data as unknown as {
@@ -278,7 +283,7 @@ function NewTicketForm() {
       };
       const toTime = (iso: string | null) =>
         iso ? new Date(iso).toTimeString().slice(0, 5) : "";
-      setReviseSeries(t.series_no);
+      setLoadedSeries(t.series_no);
       setFormBranchId(t.branch_id);
       setTicketDate(t.ticket_date);
       applyClient(t.clients);
@@ -306,17 +311,19 @@ function NewTicketForm() {
             };
           }),
       );
-      setPayments(
-        t.ticket_payments.map((p) => ({
-          key: nextKey(),
-          method: p.method,
-          amountInput: String(p.amount_cents / 100),
-          reference: p.reference ?? "",
-        })),
-      );
+      if (t.ticket_payments.length > 0) {
+        setPayments(
+          t.ticket_payments.map((p) => ({
+            key: nextKey(),
+            method: p.method,
+            amountInput: String(p.amount_cents / 100),
+            reference: p.reference ?? "",
+          })),
+        );
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reviseId]);
+  }, [loadId]);
 
   // Warn before navigating away from unsaved work (spec §6).
   useEffect(() => {
@@ -374,7 +381,9 @@ function NewTicketForm() {
   const paymentTotal = payments.reduce((a, p) => a + (parsePesos(p.amountInput || "0") ?? 0), 0);
 
   // ---- validation (client-side for speed; the server is the truth) --------
-  function validate(): boolean {
+  // Parking or keep-open skips the payments check — money is settled at
+  // billing time only.
+  function validate(needPayments: boolean): boolean {
     const e: Record<string, string> = {};
 
     if (!formBranchId) e.branch = "Pick the branch this sale happened at.";
@@ -405,7 +414,7 @@ function NewTicketForm() {
       void i;
     });
 
-    if (paymentTotal !== ticketTotal)
+    if (needPayments && paymentTotal !== ticketTotal)
       e.payments = `Payments come to ${formatCentavos(paymentTotal)} but the ticket totals ${formatCentavos(ticketTotal)}.`;
 
     if (reviseId && remarks.trim() === "")
@@ -464,23 +473,32 @@ function NewTicketForm() {
     };
   }
 
-  async function submit() {
+  async function submit(action: "save" | "park" | "keepopen") {
     setSubmitError(null);
-    if (!validate()) return;
+    if (!validate(action === "save")) return;
     setBusy(true);
 
     const payload = buildPayload();
     const clientLabel = clientName.trim() || (phoneDeclined ? "Walk-in" : phone);
+    const queueable = action === "save" && !reviseId && !resumeId;
 
     try {
       const supabase = createClient();
-      const { error } = reviseId
-        ? await supabase.rpc("revise_ticket", {
-            p_original: reviseId,
-            p_remarks: remarks.trim(),
-            p_payload: payload,
-          })
-        : await supabase.rpc("create_ticket", { p_payload: payload });
+      const { error } = action === "park"
+        ? await supabase.rpc("open_ticket", { p_payload: payload })
+        : resumeId
+          ? await supabase.rpc("save_open_ticket", {
+              p_ticket: resumeId,
+              p_payload: payload,
+              p_close: action === "save",
+            })
+          : reviseId
+            ? await supabase.rpc("revise_ticket", {
+                p_original: reviseId,
+                p_remarks: remarks.trim(),
+                p_payload: payload,
+              })
+            : await supabase.rpc("create_ticket", { p_payload: payload });
 
       if (!error && matched && matched.birth_month == null && birthMonth !== "" && birthDay !== "") {
         // Heard at the register: fill in a missing birthday on the existing
@@ -494,12 +512,12 @@ function NewTicketForm() {
 
       if (error) {
         // Network-ish failures queue; validation failures surface (spec §9).
-        // Revisions never queue — voiding the original offline would be
-        // invisible, so the admin retries with the connection back.
+        // Only a plain new ticket queues — revisions and open-ticket edits
+        // change server state that must be visible immediately.
         const transient =
           !navigator.onLine ||
           /fetch|network|timeout|failed to/i.test(error.message);
-        if (transient && !reviseId) {
+        if (transient && queueable) {
           await enqueueTicket(payload, {
             clientLabel,
             totalCents: ticketTotal,
@@ -510,7 +528,7 @@ function NewTicketForm() {
           return;
         }
         setSubmitError(transient
-          ? "The connection failed — the revision was not saved. Try again once back online."
+          ? "The connection failed — nothing was saved. Try again once back online."
           : friendlyDbError(error.message));
         setBusy(false);
         return;
@@ -520,8 +538,8 @@ function NewTicketForm() {
       router.push("/tickets");
     } catch {
       // Complete transport failure — the queue, not an error (edge case 34).
-      if (reviseId) {
-        setSubmitError("The connection failed — the revision was not saved. Try again once back online.");
+      if (!queueable) {
+        setSubmitError("The connection failed — nothing was saved. Try again once back online.");
         setBusy(false);
         return;
       }
@@ -536,7 +554,9 @@ function NewTicketForm() {
   }
 
   // ---- render -------------------------------------------------------------
-  const pageTitle = reviseId ? "Revise ticket" : "Add ticket";
+  const pageTitle = reviseId ? "Revise ticket"
+    : resumeId ? `Open ticket ${loadedSeries ?? ""}`
+    : "Add ticket";
 
   if (ref.status === "loading") {
     return (
@@ -577,8 +597,15 @@ function NewTicketForm() {
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-[20px] font-bold">{pageTitle}</h1>
 
+      {resumeId && (
+        <p className="rounded-[4px] bg-surface-page p-2 text-[13px] text-text-muted">
+          This ticket is parked — add services as the visit unfolds. Bill &amp; close when the
+          client is done; nothing counts in sales or cash until then.
+        </p>
+      )}
+
       {reviseId && (
-        <Card title={`Revising ticket ${reviseSeries ?? ""}`}>
+        <Card title={`Revising ticket ${loadedSeries ?? ""}`}>
           <p className="mb-4 text-[11px] text-text-muted">
             Saving voids the original and creates a corrected ticket. Both stay on record,
             cross-referenced, and the void is audited.
@@ -1086,8 +1113,18 @@ function NewTicketForm() {
           >
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void submit()}>
-            {reviseId ? "Save revision" : "Save ticket"}
+          {!reviseId && !resumeId && (
+            <Button busy={busy} busyLabel="Parking" onClick={() => void submit("park")}>
+              Park — bill later
+            </Button>
+          )}
+          {resumeId && (
+            <Button busy={busy} busyLabel="Saving" onClick={() => void submit("keepopen")}>
+              Save &amp; keep open
+            </Button>
+          )}
+          <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void submit("save")}>
+            {reviseId ? "Save revision" : resumeId ? "Bill & close" : "Save ticket"}
           </Button>
         </div>
       </div>

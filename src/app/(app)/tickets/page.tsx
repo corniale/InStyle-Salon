@@ -24,6 +24,7 @@ interface TicketRow {
   id: string;
   series_no: string | null;
   ticket_date: string;
+  status: "open" | "closed";
   payment_method: string;
   is_new_client: boolean;
   voided_at: string | null;
@@ -71,7 +72,7 @@ export default function TicketsPage() {
     let query = supabase
       .from("tickets")
       .select(
-        "id, series_no, ticket_date, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))",
+        "id, series_no, ticket_date, status, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))",
       )
       .eq("ticket_date", date)
       .order("created_at", { ascending: false })
@@ -87,7 +88,7 @@ export default function TicketsPage() {
     downloadCsv(
       `tickets-${date}.csv`,
       ["Ticket", "Date", "Client", "Phone", "Services", "Technicians", "Payment",
-       "Total", "Company share", "New client", "Voided", "Void reason"],
+       "Total", "Company share", "New client", "Status", "Void reason"],
       q.data.map((t) => [
         t.series_no,
         t.ticket_date,
@@ -100,7 +101,7 @@ export default function TicketsPage() {
         csvPesos(t.ticket_lines.reduce((s, l) => s + l.total_cents, 0)),
         csvPesos(t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0)),
         t.is_new_client ? "yes" : "",
-        t.voided_at != null ? "yes" : "",
+        t.voided_at != null ? "void" : t.status,
         t.void_reason,
       ]),
     );
@@ -130,6 +131,48 @@ export default function TicketsPage() {
       </div>
 
       <OfflineQueuePanel />
+
+      {q.status === "ready" && q.data.some((t) => t.status === "open" && !t.voided_at) && (
+        <Card title="Open tickets — waiting to be billed">
+          <Table>
+            <thead>
+              <tr>
+                <Th>Ticket</Th>
+                <Th>Client</Th>
+                <Th>Services so far</Th>
+                <Th align="right">Running total</Th>
+                <Th></Th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.filter((t) => t.status === "open" && !t.voided_at).map((t) => (
+                <tr key={t.id}>
+                  <Td className="tnum font-bold">{t.series_no ?? "—"}</Td>
+                  <Td><Truncate text={clientLabel(t)} /></Td>
+                  <Td>
+                    <Truncate
+                      text={t.ticket_lines.map((l) => l.services?.name ?? "?").join(", ") || "—"}
+                      max={44}
+                    />
+                  </Td>
+                  <Td align="right" className="tnum">
+                    {formatCentavos(t.ticket_lines.reduce((s, l) => s + l.total_cents, 0))}
+                  </Td>
+                  <Td align="right">
+                    <Link href={`/tickets/new?resume=${t.id}`}>
+                      <Button variant="primary">Resume</Button>
+                    </Link>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+          <p className="mt-2 text-[11px] text-text-muted">
+            Open tickets count nowhere until billed, and the cash day cannot close while any
+            remain.
+          </p>
+        </Card>
+      )}
 
       <Card>
         {q.status === "loading" && <SkeletonRows rows={8} cols={6} />}
@@ -191,6 +234,11 @@ export default function TicketsPage() {
                           void
                         </span>
                       )}
+                      {!voided && t.status === "open" && (
+                        <span className="ml-2 rounded-[4px] bg-surface-page px-1 text-[11px] font-bold">
+                          open
+                        </span>
+                      )}
                     </Td>
                     <Td>
                       <Truncate
@@ -218,24 +266,39 @@ export default function TicketsPage() {
                         max={22}
                       />
                     </Td>
-                    <Td>{PAYMENT_LABEL[t.payment_method] ?? t.payment_method}</Td>
+                    <Td>{t.status === "open" && !voided
+                      ? "—"
+                      : (PAYMENT_LABEL[t.payment_method] ?? t.payment_method)}</Td>
                     <Td align="right" className="tnum">{formatCentavos(total)}</Td>
                     <Td align="right" className="tnum">{formatCentavos(share)}</Td>
                     <Td align="right">
-                      {isManagerUp && !voided && (
+                      {!voided && (
                         <span className="flex items-center justify-end gap-3">
-                          <Link
-                            href={`/tickets/new?revise=${t.id}`}
-                            className="text-[11px] hover:underline"
-                          >
-                            Revise
-                          </Link>
-                          <button
-                            className="text-[11px] text-brand-red hover:underline"
-                            onClick={() => setVoidTarget(t)}
-                          >
-                            Void
-                          </button>
+                          {t.status === "open" ? (
+                            <Link
+                              href={`/tickets/new?resume=${t.id}`}
+                              className="text-[11px] font-bold hover:underline"
+                            >
+                              Resume
+                            </Link>
+                          ) : (
+                            isManagerUp && (
+                              <Link
+                                href={`/tickets/new?revise=${t.id}`}
+                                className="text-[11px] hover:underline"
+                              >
+                                Revise
+                              </Link>
+                            )
+                          )}
+                          {isManagerUp && (
+                            <button
+                              className="text-[11px] text-brand-red hover:underline"
+                              onClick={() => setVoidTarget(t)}
+                            >
+                              Void
+                            </button>
+                          )}
                         </span>
                       )}
                     </Td>

@@ -614,7 +614,9 @@ function CloseModal({ open, branchId, date, expected, onClose, onDone }: {
     });
     setBusy(false);
     if (error) {
-      setError("The day did not close. Check the count and try again.");
+      setError(/open tickets remain/i.test(error.message)
+        ? error.message
+        : "The day did not close. Check the count and try again.");
       return;
     }
     setCountedInput("");
