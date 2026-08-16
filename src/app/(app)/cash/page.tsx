@@ -257,7 +257,7 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
               )}
             </div>
 
-            <div className="mt-4 max-w-md space-y-1 text-[13px]">
+            <div className="mt-4 max-w-xl space-y-1 text-[13px]">
               {single && !closed ? (
                 <OpeningBalanceEditor
                   branchId={branchId}
@@ -395,8 +395,8 @@ function OpeningBalanceEditor({ branchId, date, cents, onSaved }: {
 
   return (
     <div className="flex items-center justify-between gap-4">
-      <span className="text-text-muted">Opening balance (change fund)</span>
-      <span className="flex items-center gap-2">
+      <span className="whitespace-nowrap text-text-muted">Opening balance (change fund)</span>
+      <span className="flex shrink-0 items-center gap-2">
         <Input
           inputMode="decimal"
           value={input}
