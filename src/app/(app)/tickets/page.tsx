@@ -147,7 +147,11 @@ export default function TicketsPage() {
             <tbody>
               {q.data.filter((t) => t.status === "open" && !t.voided_at).map((t) => (
                 <tr key={t.id}>
-                  <Td className="tnum font-bold">{t.series_no ?? "—"}</Td>
+                  <Td className="tnum">
+                    <Link href={`/tickets/detail?id=${t.id}`} className="font-bold hover:underline">
+                      {t.series_no ?? "—"}
+                    </Link>
+                  </Td>
                   <Td><Truncate text={clientLabel(t)} /></Td>
                   <Td>
                     <Truncate
@@ -220,7 +224,10 @@ export default function TicketsPage() {
                 return (
                   <tr key={t.id} className={voided ? "opacity-50" : ""}>
                     <Td>
-                      <span className="tnum">{t.series_no ?? "—"}</span>
+                      <Link href={`/tickets/detail?id=${t.id}`}
+                        className="tnum font-bold hover:underline">
+                        {t.series_no ?? "—"}
+                      </Link>
                       {t.is_new_client && !voided && (
                         <span className="ml-2 rounded-[4px] bg-surface-page px-1 text-[11px] text-text-muted">
                           new client
