@@ -113,6 +113,9 @@ export interface TicketLine {
   service_id: string;
   technician_id: string;
   assist_technician_id: string | null;
+  is_upsell: boolean;
+  started_at: string | null;
+  ended_at: string | null;
   qty: number;
   unit_price_cents: number;
   discount_type: DiscountType | null;
@@ -190,6 +193,9 @@ export interface TicketPayload {
     sharing_rate: number;
     rating?: number;
     package_id?: string;
+    is_upsell?: boolean;
+    started_at?: string;
+    ended_at?: string;
   }>;
   payments: Array<{
     method: PaymentMethod;

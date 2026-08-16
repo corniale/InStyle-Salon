@@ -30,6 +30,8 @@ interface TechRow {
   client_retention_pct: number | null;
   avg_rating: number | null;
   rated_pct: number | null;
+  upsell_lines: number;
+  upsell_pct: number | null;
   expected_margin_pct: number | null;
   actual_margin_pct: number | null;
   margin_vs_expected_pts: number | null;
@@ -108,6 +110,7 @@ const TECH_ACC: Record<string, (t: TechRow) => unknown> = {
   share: (t) => t.company_share_cents,
   margin: (t) => t.margin_vs_expected_pts,
   retention: (t) => t.client_retention_pct,
+  upsell: (t) => t.upsell_pct,
   rating: (t) => t.avg_rating,
   utilisation: (t) => t.utilisation_pct,
 };
@@ -126,6 +129,7 @@ function TechTable({ rows: input }: { rows: TechRow[] }) {
           <Th align="right" {...th("share")}>Company share</Th>
           <Th align="right" {...th("margin")}>Margin vs expected</Th>
           <Th align="right" {...th("retention")}>Client retention</Th>
+          <Th align="right" {...th("upsell")}>Upsell rate</Th>
           <Th align="right" {...th("rating")}>Rating</Th>
           <Th align="right" {...th("utilisation")}>Utilisation</Th>
         </tr>
@@ -151,6 +155,16 @@ function TechTable({ rows: input }: { rows: TechRow[] }) {
               <span className="ml-1 text-[11px] text-text-muted">
                 {t.repeat_clients}/{t.distinct_clients}
               </span>
+            </Td>
+            <Td align="right" className="tnum">
+              {t.upsell_pct != null && t.upsell_pct > 0 ? (
+                <>
+                  {formatPct(t.upsell_pct, 0)}
+                  <span className="ml-1 text-[11px] text-text-muted">
+                    {t.upsell_lines}×
+                  </span>
+                </>
+              ) : "—"}
             </Td>
             <Td align="right" className="tnum">
               {t.avg_rating != null ? t.avg_rating.toFixed(2) : "—"}

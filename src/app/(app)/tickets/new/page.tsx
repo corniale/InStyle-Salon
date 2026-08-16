@@ -38,9 +38,12 @@ interface LineDraft {
   qty: number;
   priceInput: string; // pesos, as typed
   discount_type: "" | DiscountType;
-  discountInput: string;
+  discountInput: string; // percent, as typed
   rating: "" | number;
   package_id: string;
+  is_upsell: boolean;
+  startedAt: string; // HH:MM
+  endedAt: string;   // HH:MM
 }
 
 interface PaymentDraft {
@@ -57,6 +60,7 @@ function emptyLine(): LineDraft {
   return {
     key: nextKey(), service_id: "", technician_id: "", assist_technician_id: "",
     qty: 1, priceInput: "", discount_type: "", discountInput: "", rating: "", package_id: "",
+    is_upsell: false, startedAt: "", endedAt: "",
   };
 }
 
@@ -163,8 +167,6 @@ export default function NewTicketPage() {
   const [payments, setPayments] = useState<PaymentDraft[]>([
     { key: nextKey(), method: "cash", amountInput: "", reference: "" },
   ]);
-  const [startedAt, setStartedAt] = useState("");
-  const [endedAt, setEndedAt] = useState("");
   const [ticketDate, setTicketDate] = useState(new Date().toLocaleDateString("sv-SE"));
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -236,11 +238,10 @@ export default function NewTicketPage() {
       if (!Number.isFinite(pct) || pct < 0 || pct > 100)
         e[`line-${l.key}-discount`] = "Discount must be 0 to 100 percent.";
       if (l.qty < 1) e[`line-${l.key}-qty`] = "Quantity must be at least 1.";
+      if (l.startedAt && l.endedAt && l.endedAt < l.startedAt)
+        e[`line-${l.key}-time`] = "Time ended is before time started.";
       void i;
     });
-
-    if (startedAt && endedAt && endedAt < startedAt)
-      e.times = "Time ended is before time started.";
 
     if (paymentTotal !== ticketTotal)
       e.payments = `Payments come to ${formatCentavos(paymentTotal)} but the ticket totals ${formatCentavos(ticketTotal)}.`;
@@ -265,8 +266,6 @@ export default function NewTicketPage() {
               barangay: barangay.trim() || undefined,
               inquiry_source: inquirySource.trim() || undefined,
             },
-      started_at: startedAt ? new Date(`${ticketDate}T${startedAt}`).toISOString() : undefined,
-      ended_at: endedAt ? new Date(`${ticketDate}T${endedAt}`).toISOString() : undefined,
       is_new_client: isNewClient,
       lines: lines.map((l) => {
         const service = serviceById.get(l.service_id);
@@ -283,6 +282,11 @@ export default function NewTicketPage() {
           sharing_rate: price?.sharing_rate ?? service?.default_sharing_rate ?? 0.5,
           rating: l.rating === "" ? undefined : l.rating,
           package_id: l.package_id || undefined,
+          is_upsell: l.is_upsell || undefined,
+          started_at: l.startedAt
+            ? new Date(`${ticketDate}T${l.startedAt}`).toISOString() : undefined,
+          ended_at: l.endedAt
+            ? new Date(`${ticketDate}T${l.endedAt}`).toISOString() : undefined,
         };
       }),
       payments: payments
@@ -634,6 +638,26 @@ export default function NewTicketPage() {
                       onChange={(e) => updateLine(line.key, { discountInput: e.target.value })}
                     />
                   </Field>
+                  <Field label="Time started" error={errors[`line-${line.key}-time`]}>
+                    <Input type="time" value={line.startedAt}
+                      invalid={!!errors[`line-${line.key}-time`]}
+                      onChange={(e) => updateLine(line.key, { startedAt: e.target.value })} />
+                  </Field>
+                  <Field label="Time ended">
+                    <Input type="time" value={line.endedAt}
+                      onChange={(e) => updateLine(line.key, { endedAt: e.target.value })} />
+                  </Field>
+                  <div className="flex items-end pb-1">
+                    <label className="flex items-center gap-2 text-[13px]">
+                      <input
+                        type="checkbox"
+                        checked={line.is_upsell}
+                        onChange={(e) => updateLine(line.key, { is_upsell: e.target.checked })}
+                      />
+                      Upsell — sold on top of what they came for
+                    </label>
+                  </div>
+
                   {pkgOptions.length > 0 ? (
                     <Field label="Redeem package session" hint="Sets the line to zero via a package discount">
                       <Select
@@ -684,7 +708,7 @@ export default function NewTicketPage() {
         </div>
       </Card>
 
-      <Card title="Time and payment">
+      <Card title="Date and payment">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Field label="Date" hint="Backdating is allowed until that day's cash is closed">
             <Input
@@ -692,14 +716,6 @@ export default function NewTicketPage() {
               max={new Date().toLocaleDateString("sv-SE")}
               onChange={(e) => { markDirty(); setTicketDate(e.target.value); }}
             />
-          </Field>
-          <Field label="Time started" error={errors.times}>
-            <Input type="time" value={startedAt}
-              onChange={(e) => { markDirty(); setStartedAt(e.target.value); }} />
-          </Field>
-          <Field label="Time ended">
-            <Input type="time" value={endedAt}
-              onChange={(e) => { markDirty(); setEndedAt(e.target.value); }} />
           </Field>
         </div>
 

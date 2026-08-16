@@ -46,8 +46,14 @@ const CLIENT_ACC: Record<string, (c: ClientListRow) => unknown> = {
   type: (c) => (c.ret == null ? null : c.ret.visit_count > 1 ? "Returning" : "New"),
   visits: (c) => c.ret?.visit_count ?? null,
   spend: (c) => c.ret?.lifetime_spend_cents ?? null,
+  avg: (c) => avgSpendCents(c.ret),
   status: (c) => c.ret?.status ?? null,
 };
+
+function avgSpendCents(r: RetentionRow | null | undefined): number | null {
+  if (!r || r.visit_count === 0) return null;
+  return Math.round(r.lifetime_spend_cents / r.visit_count);
+}
 
 export default function ClientsPage() {
   return (
@@ -117,18 +123,105 @@ function ClientsList() {
   }, [search, page, canSeeAnalytics]);
 
   const { rows, th } = useSort(q.status === "ready" ? q.data.rows : null, CLIENT_ACC);
+  const [exporting, setExporting] = useState(false);
+
+  // CSV of the whole (searched) list, not just the visible page. Fetched in
+  // 1,000-row pages under the API cap; retention joined in batches.
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const supabase = createClient();
+      interface ExportClient extends ClientRow {
+        barangay: string | null;
+        birth_month: number | null;
+        birth_day: number | null;
+      }
+      const all: ExportClient[] = [];
+      for (let offset = 0; ; offset += 1000) {
+        let query = supabase
+          .from("clients")
+          .select("id, phone, phone_declined, full_name, town, barangay, inquiry_source, birth_month, birth_day, first_visit_on")
+          .is("merged_into_id", null)
+          .order("full_name", { ascending: true, nullsFirst: false })
+          .order("id")
+          .range(offset, offset + 999);
+        const s = search.trim();
+        if (s !== "") {
+          query = /^\d+$/.test(s)
+            ? query.like("phone", `%${s}%`)
+            : query.ilike("full_name", `%${s}%`);
+        }
+        const chunk = unwrap(await query) as ExportClient[];
+        all.push(...chunk);
+        if (chunk.length < 1000) break;
+      }
+
+      const ret = new Map<string, RetentionRow>();
+      if (canSeeAnalytics) {
+        for (let i = 0; i < all.length; i += 500) {
+          const { data } = await supabase
+            .from("v_client_retention")
+            .select("client_id, visit_count, last_visit, lifetime_spend_cents, status")
+            .in("client_id", all.slice(i, i + 500).map((r) => r.id));
+          for (const r of (data ?? []) as RetentionRow[]) ret.set(r.client_id, r);
+        }
+      }
+
+      const esc = (v: string | number | null | undefined) => {
+        const t = v == null ? "" : String(v);
+        return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+      };
+      const pesos = (cents: number | null) =>
+        cents == null ? "" : (cents / 100).toFixed(2);
+      const header = [
+        "Name", "Phone", "Town", "Barangay", "Client discovery method",
+        "Birthday", "First visit", "Client type", "Visits", "Last visit",
+        "Lifetime spend", "Avg spend per visit", "Status",
+      ];
+      const lines = all.map((c) => {
+        const r = ret.get(c.id);
+        return [
+          esc(c.full_name ?? (c.phone_declined ? "Walk-in" : c.phone)),
+          esc(c.phone_declined ? "declined" : c.phone),
+          esc(c.town), esc(c.barangay), esc(c.inquiry_source),
+          esc(formatBirthday(c.birth_month, c.birth_day)),
+          esc(c.first_visit_on),
+          esc(r == null ? "" : r.visit_count > 1 ? "Returning" : "New"),
+          esc(r?.visit_count ?? ""),
+          esc(r?.last_visit ?? ""),
+          pesos(r?.lifetime_spend_cents ?? null),
+          pesos(avgSpendCents(r)),
+          esc(r?.status ?? ""),
+        ].join(",");
+      });
+      const blob = new Blob(["﻿" + [header.join(","), ...lines].join("\r\n")],
+        { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `clients-${new Date().toLocaleDateString("sv-SE")}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Clients</h1>
-        <Input
-          placeholder="Search name or phone"
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); syncUrl(e.target.value, 0); }}
-          className="w-64"
-          aria-label="Search clients"
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder="Search name or phone"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); syncUrl(e.target.value, 0); }}
+            className="w-64"
+            aria-label="Search clients"
+          />
+          <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       <BirthdaysCard />
@@ -166,6 +259,7 @@ function ClientsList() {
                       <Th {...th("type")}>Client type</Th>
                       <Th align="right" {...th("visits")}>Visits</Th>
                       <Th align="right" {...th("spend")}>Lifetime spend</Th>
+                      <Th align="right" {...th("avg")}>Avg spend / visit</Th>
                       <Th {...th("status")}>Status</Th>
                     </>
                   )}
@@ -197,6 +291,9 @@ function ClientsList() {
                           <Td align="right" className="tnum">{r?.visit_count ?? "—"}</Td>
                           <Td align="right" className="tnum">
                             {r ? formatCentavos(r.lifetime_spend_cents) : "—"}
+                          </Td>
+                          <Td align="right" className="tnum">
+                            {formatCentavos(avgSpendCents(r))}
                           </Td>
                           <Td><StatusBadge status={r?.status} /></Td>
                         </>
