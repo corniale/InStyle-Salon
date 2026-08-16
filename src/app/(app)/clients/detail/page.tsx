@@ -18,7 +18,7 @@ import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
   SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
-import { StatusBadge, MONTH_SHORT, formatBirthday } from "@/components/client-bits";
+import { StatusBadge, MONTH_SHORT, formatBirthday, formatClientNo } from "@/components/client-bits";
 
 interface VisitRow {
   visit_date: string;
@@ -146,15 +146,26 @@ function ClientDetail() {
             {client.full_name ?? (client.phone_declined ? "Walk-in" : client.phone)}
           </h1>
           <p className="text-[13px] text-text-muted tnum">
+            {formatClientNo(client.client_no)}
+            {" · "}
             {client.phone_declined ? "Phone declined" : client.phone}
             {client.town && ` · ${client.town}`}
             {client.barangay && `, ${client.barangay}`}
             {client.first_visit_on && ` · first visit ${client.first_visit_on}`}
             {formatBirthday(client.birth_month, client.birth_day) &&
               ` · birthday ${formatBirthday(client.birth_month, client.birth_day)}`}
+            {client.special_discount_pct != null &&
+              ` · special discount ${Number(client.special_discount_pct)}%`}
           </p>
           {client.birth_month == null && (
             <BirthdaySetter clientId={client.id} onSet={q.retry} />
+          )}
+          {isManagerUp && (
+            <SpecialDiscountEditor
+              clientId={client.id}
+              current={client.special_discount_pct}
+              onSet={q.retry}
+            />
           )}
         </div>
         {isManagerUp && (
@@ -216,6 +227,67 @@ function ClientDetail() {
         onDone={(winnerId) =>
           router.push(`/clients/detail?id=${winnerId}${listQS ? `&${listQS}` : ""}`)}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Standing "special" discount — a pricing decision, so manager+ only (RLS
+// enforces it too). The POS pre-fills every service line with it.
+// ---------------------------------------------------------------------------
+
+function SpecialDiscountEditor({ clientId, current, onSet }: {
+  clientId: string;
+  current: number | null;
+  onSet: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState(current != null ? String(Number(current)) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    const pct = input.trim() === "" ? null : Number(input);
+    if (pct != null && (!Number.isFinite(pct) || pct <= 0 || pct > 100)) {
+      setError("Enter a percent from 1 to 100, or leave empty to remove.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error } = await createClient()
+      .from("clients")
+      .update({ special_discount_pct: pct })
+      .eq("id", clientId);
+    setBusy(false);
+    if (error) {
+      setError("The discount was not saved. Try again.");
+      return;
+    }
+    setOpen(false);
+    onSet();
+  }
+
+  if (!open) {
+    return (
+      <button
+        className="mt-1 text-[11px] text-text-muted hover:text-text-body hover:underline"
+        onClick={() => setOpen(true)}
+      >
+        {current != null ? "Change special discount" : "Set a special discount"}
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2 flex items-end gap-2">
+      <Field label="Special discount (%)" error={error ?? undefined}
+        hint="Applied to every service on this client's tickets">
+        <Input inputMode="numeric" value={input} className="w-24" invalid={!!error}
+          onChange={(e) => setInput(e.target.value)} />
+      </Field>
+      <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void save()}>
+        Save
+      </Button>
+      <Button onClick={() => setOpen(false)}>Cancel</Button>
     </div>
   );
 }

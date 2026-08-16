@@ -16,10 +16,11 @@ import { formatCentavos } from "@/lib/money";
 import {
   Button, Card, EmptyState, ErrorState, Input, SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
-import { Pagination, StatusBadge, formatBirthday, CLIENTS_PAGE_SIZE as PAGE } from "@/components/client-bits";
+import { Pagination, StatusBadge, formatBirthday, formatClientNo, CLIENTS_PAGE_SIZE as PAGE } from "@/components/client-bits";
 
 interface ClientRow {
   id: string;
+  client_no: number;
   phone: string;
   phone_declined: boolean;
   full_name: string | null;
@@ -39,6 +40,7 @@ interface RetentionRow {
 type ClientListRow = ClientRow & { ret: RetentionRow | null };
 
 const CLIENT_ACC: Record<string, (c: ClientListRow) => unknown> = {
+  clientNo: (c) => c.client_no,
   name: (c) => c.full_name ?? (c.phone_declined ? "Walk-in" : c.phone),
   phone: (c) => (c.phone_declined ? null : c.phone),
   town: (c) => c.town,
@@ -92,7 +94,7 @@ function ClientsList() {
     const supabase = createClient();
     let query = supabase
       .from("clients")
-      .select("id, phone, phone_declined, full_name, town, inquiry_source, first_visit_on", { count: "exact" })
+      .select("id, client_no, phone, phone_declined, full_name, town, inquiry_source, first_visit_on", { count: "exact" })
       .is("merged_into_id", null)
       .order("full_name", { ascending: true, nullsFirst: false })
       .range(page * PAGE, page * PAGE + PAGE - 1);
@@ -135,12 +137,13 @@ function ClientsList() {
         barangay: string | null;
         birth_month: number | null;
         birth_day: number | null;
+        special_discount_pct: number | null;
       }
       const all: ExportClient[] = [];
       for (let offset = 0; ; offset += 1000) {
         let query = supabase
           .from("clients")
-          .select("id, phone, phone_declined, full_name, town, barangay, inquiry_source, birth_month, birth_day, first_visit_on")
+          .select("id, client_no, phone, phone_declined, full_name, town, barangay, inquiry_source, birth_month, birth_day, special_discount_pct, first_visit_on")
           .is("merged_into_id", null)
           .order("full_name", { ascending: true, nullsFirst: false })
           .order("id")
@@ -174,17 +177,19 @@ function ClientsList() {
       const pesos = (cents: number | null) =>
         cents == null ? "" : (cents / 100).toFixed(2);
       const header = [
-        "Name", "Phone", "Town", "Barangay", "Client discovery method",
-        "Birthday", "First visit", "Client type", "Visits", "Last visit",
-        "Lifetime spend", "Avg spend per visit", "Status",
+        "Client ID", "Name", "Phone", "Town", "Barangay", "Client discovery method",
+        "Birthday", "Special discount %", "First visit", "Client type", "Visits",
+        "Last visit", "Lifetime spend", "Avg spend per visit", "Status",
       ];
       const lines = all.map((c) => {
         const r = ret.get(c.id);
         return [
+          esc(formatClientNo(c.client_no)),
           esc(c.full_name ?? (c.phone_declined ? "Walk-in" : c.phone)),
           esc(c.phone_declined ? "declined" : c.phone),
           esc(c.town), esc(c.barangay), esc(c.inquiry_source),
           esc(formatBirthday(c.birth_month, c.birth_day)),
+          esc(c.special_discount_pct != null ? Number(c.special_discount_pct) : ""),
           esc(c.first_visit_on),
           esc(r == null ? "" : r.visit_count > 1 ? "Returning" : "New"),
           esc(r?.visit_count ?? ""),
@@ -250,6 +255,7 @@ function ClientsList() {
             <Table>
               <thead>
                 <tr>
+                  <Th {...th("clientNo")}>Client ID</Th>
                   <Th {...th("name")}>Name</Th>
                   <Th {...th("phone")}>Phone</Th>
                   <Th {...th("town")}>Town</Th>
@@ -270,6 +276,7 @@ function ClientsList() {
                   const r = c.ret;
                   return (
                     <tr key={c.id}>
+                      <Td className="tnum">{formatClientNo(c.client_no)}</Td>
                       <Td>
                         <Link
                           href={`/clients/detail?id=${c.id}${listQS ? `&${listQS}` : ""}`}

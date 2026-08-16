@@ -12,6 +12,11 @@ export function formatBirthday(month: number | null, day: number | null): string
 
 export const CLIENTS_PAGE_SIZE = 50;
 
+export function formatClientNo(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return `C-${String(n).padStart(6, "0")}`;
+}
+
 export function StatusBadge({ status }: { status?: string }) {
   if (!status) return <span className="text-text-muted">—</span>;
   const map: Record<string, { label: string; cls: string }> = {

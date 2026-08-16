@@ -192,11 +192,27 @@ export default function NewTicketPage() {
 
   function pickService(key: number, serviceId: string) {
     const price = priceBook.get(serviceId);
+    const sp = matched?.special_discount_pct;
     updateLine(key, {
       service_id: serviceId,
       priceInput: price ? String(price.price_cents / 100) : "",
+      // A client-level discount rides onto every service automatically.
+      ...(sp != null
+        ? { discount_type: "special" as const, discountInput: String(Number(sp)) }
+        : {}),
     });
   }
+
+  // If the client match lands after services were already picked, carry the
+  // standing discount onto lines that have none yet.
+  useEffect(() => {
+    const sp = matched?.special_discount_pct;
+    if (sp == null) return;
+    setLines((ls) => ls.map((l) =>
+      l.service_id !== "" && l.discount_type === "" && l.discountInput === ""
+        ? { ...l, discount_type: "special" as const, discountInput: String(Number(sp)) }
+        : l));
+  }, [matched]);
 
   // ---- derived totals -----------------------------------------------------
   // Discounts are entered as a percentage; the peso amount is computed here
@@ -444,6 +460,11 @@ export default function NewTicketPage() {
                   {" "}· {clientPackages.length} active package{clientPackages.length > 1 ? "s" : ""}
                 </span>
               )}
+              {matched.special_discount_pct != null && (
+                <span className="ml-2 rounded-[4px] bg-surface-card px-2 py-px text-[11px] font-bold">
+                  Special discount {Number(matched.special_discount_pct)}% — applied to every line
+                </span>
+              )}
               {matched.birth_month != null && matched.birth_day != null && (() => {
                 const today = new Date();
                 const bday = new Date(today.getFullYear(), matched.birth_month! - 1, matched.birth_day!);
@@ -624,6 +645,7 @@ export default function NewTicketPage() {
                       }
                     >
                       <option value="">None</option>
+                      <option value="special">Special</option>
                       <option value="birthday">Birthday</option>
                       <option value="senior">Senior</option>
                       <option value="pwd">PWD</option>

@@ -71,6 +71,7 @@ export interface Technician {
 
 export interface Client {
   id: string;
+  client_no: number;
   phone: string;
   phone_declined: boolean;
   full_name: string | null;
@@ -81,6 +82,8 @@ export interface Client {
   first_visit_on: string | null;
   birth_month: number | null;
   birth_day: number | null;
+  /** Standing discount applied to every service, as "special" on lines. */
+  special_discount_pct: number | null;
   notes: string | null;
   merged_into_id: string | null;
 }
@@ -105,7 +108,8 @@ export interface Ticket {
   created_at: string;
 }
 
-export type DiscountType = "senior" | "pwd" | "staff" | "promo" | "negotiated" | "package" | "birthday";
+export type DiscountType =
+  "senior" | "pwd" | "staff" | "promo" | "negotiated" | "package" | "birthday" | "special";
 
 export interface TicketLine {
   id: string;
