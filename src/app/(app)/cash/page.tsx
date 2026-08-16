@@ -115,7 +115,7 @@ export default function CashPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Daily cash</h1>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <PeriodPicker value={period} onChange={setPeriod} />
           {isAdminUp && (
             <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>

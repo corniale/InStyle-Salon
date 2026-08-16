@@ -69,7 +69,7 @@ export function PeriodPicker({ value, onChange, withPastMonths, withRange }: {
     ["today", "Today"], ["month", "This month"], ["ytd", "Year to date"],
   ];
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       <div className="flex rounded-[4px] border border-border">
         {presets.map(([k, label]) => (
           <button

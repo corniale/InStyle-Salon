@@ -42,7 +42,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Dashboard</h1>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <PeriodPicker value={period} onChange={setPeriod} withPastMonths />
           {isAdminUp && <ExportDetailButton branchId={branchId} from={from} to={to} />}
         </div>
