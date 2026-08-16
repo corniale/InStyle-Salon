@@ -106,9 +106,24 @@ These are working defaults, all reversible, flagged for client confirmation:
 
 ## Backlog
 
+Deferred features (client said "later"):
+- Tickets view: Today / This month / YTD / date-picker filters with
+  pagination and a date column.
+- Ticket search box (client name, phone, TS#).
 - Define the Admin role's exact accesses (0020 gives it an interim shape:
   manager powers across all branches, plus exports; owner-only ground —
   settings, catalogue, staff accounts, audit log — stays owner-only).
-- Tickets view: period filters with pagination, and a ticket search box.
-- Inquiry funnel and appointments (Stage 2), timekeeping, banlaw
-  settlement modelling.
+- "Add Client" button — revisit when the booking module lands.
+
+Small flagged items:
+- Backdated tickets use today's price list; switch to as-of-ticket-date
+  lookup if a mid-day price change ever bites (history supports it).
+- Opening balance could default to the previous day's float for a
+  standing change fund.
+- Force two-decimal money formatting beyond the technician ranking if
+  wanted app-wide (one flag per table).
+
+Stage 2 proper:
+- Inquiry funnel and appointments/booking, timekeeping, banlaw and
+  cash-advance settlement modelling (also closes the last centavos of
+  drift vs the paper Daily Records).
