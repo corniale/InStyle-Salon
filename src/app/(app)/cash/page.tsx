@@ -204,6 +204,17 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
             </div>
 
             <div className="mt-4 max-w-md space-y-1 text-[13px]">
+              {single && !closed ? (
+                <OpeningBalanceEditor
+                  branchId={branchId}
+                  date={from}
+                  cents={day?.opening_float_cents ?? 0}
+                  onSaved={q.retry}
+                />
+              ) : (
+                <StmtRow label="Opening balance (change fund)"
+                  cents={day?.opening_float_cents ?? 0} />
+              )}
               <StmtRow label="Gross sales" cents={day?.gross_sales_cents ?? 0} />
               <StmtRow label="Technician share (paid from drawer)"
                 cents={day?.technician_share_cents ?? 0} negative />
@@ -224,11 +235,8 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
                 <StmtRow label="Gift certificates (no cash received)"
                   cents={day?.gift_cert_cents ?? 0} negative />
               )}
-              <StmtRow label="Cash expenses & withdrawals"
+              <StmtRow label="Cash expenses & deductions"
                 cents={day?.cash_expenses_cents ?? 0} negative />
-              {(day?.opening_float_cents ?? 0) !== 0 && (
-                <StmtRow label="Opening float" cents={day?.opening_float_cents ?? 0} />
-              )}
               <StmtRow label="Net cash to remit" cents={day?.expected_cash_cents ?? 0} bold top />
             </div>
 
@@ -247,8 +255,8 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
                   </>
                 ) : (
                   <>
-                    Record withdrawals, parcels and sahod under Petty cash expenses so they are
-                    deducted here.
+                    Record withdrawals, parcels and sahod under Cash expenses &amp; deductions so
+                    they are deducted here.
                     {(day?.discounts_cents ?? 0) > 0 &&
                       ` Discounts given today: ${formatCentavos(day?.discounts_cents ?? 0)} (already off gross).`}
                   </>
@@ -295,8 +303,63 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
 }
 
 // ---------------------------------------------------------------------------
-// One line of the Daily Record statement: gross → labor → company share →
-// non-cash payments → expenses → net cash to remit.
+// The change fund the drawer starts the day with. Editable until the day is
+// closed; part of expected cash, so the net line moves as it is saved.
+// ---------------------------------------------------------------------------
+
+function OpeningBalanceEditor({ branchId, date, cents, onSaved }: {
+  branchId: string;
+  date: string;
+  cents: number;
+  onSaved: () => void;
+}) {
+  const [input, setInput] = useState("");
+  const [loadedFor, setLoadedFor] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [invalid, setInvalid] = useState(false);
+
+  const key = `${branchId}:${date}:${cents}`;
+  if (loadedFor !== key) {
+    setInput(String(cents / 100));
+    setLoadedFor(key);
+    setInvalid(false);
+  }
+
+  async function save() {
+    const v = parsePesos(input);
+    if (v == null || v < 0) { setInvalid(true); return; }
+    setBusy(true);
+    setInvalid(false);
+    const { error } = await createClient().from("cash_days").upsert(
+      { branch_id: branchId, business_date: date, opening_float_cents: v },
+      { onConflict: "branch_id,business_date" },
+    );
+    setBusy(false);
+    if (error) { setInvalid(true); return; }
+    onSaved();
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-text-muted">Opening balance (change fund)</span>
+      <span className="flex items-center gap-2">
+        <Input
+          inputMode="decimal"
+          value={input}
+          invalid={invalid}
+          className="h-7 w-24 text-right tnum"
+          aria-label="Opening balance in pesos"
+          onChange={(e) => setInput(e.target.value)}
+        />
+        <Button busy={busy} busyLabel="Saving" onClick={() => void save()}>Save</Button>
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// One line of the Daily Record statement: opening balance → gross → labor →
+// company share → non-cash payments → expenses → net cash to remit.
 // ---------------------------------------------------------------------------
 
 function StmtRow({ label, cents, negative, bold, top }: {
@@ -378,7 +441,7 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
   }
 
   return (
-    <Card title="Petty cash expenses">
+    <Card title="Cash expenses & deductions">
       {single && !locked && (
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <Field label="Category">
