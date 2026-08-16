@@ -6,7 +6,7 @@
 // answered the spec's open question 4: May's sales were fully recorded —
 // it was the client names that went missing that month.
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
@@ -28,11 +28,10 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-[20px] font-bold">Analytics</h1>
+      <RetentionSummary branchId={branchId} />
       <MonthlyTrend branchId={branchId} />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <RetentionSummary branchId={branchId} />
-        <RebookingByService branchId={branchId} />
-      </div>
+      <PeakPeriods branchId={branchId} />
+      <RebookingByService branchId={branchId} />
       <AtRiskList branchId={branchId} />
     </div>
   );
@@ -59,7 +58,7 @@ function MonthlyTrend({ branchId }: { branchId: string | null }) {
       {q.status === "ready" && (
         <>
           <LineChart
-            height={200}
+            height={150}
             series={[
               {
                 name: "Sales",
@@ -134,6 +133,175 @@ function RetentionSummary({ branchId }: { branchId: string | null }) {
         </div>
       )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Peak periods — when the salon is actually busy. Month view is a proper
+// heatmap (month × weekday); day-of-week and hour views are intensity
+// strips. Hour data comes from ticket start times, so it fills in as the
+// POS captures them (July's imported times seed it).
+// ---------------------------------------------------------------------------
+
+interface PeakRow {
+  dim: string;
+  bucket: number;
+  dow: number | null;
+  tickets: number;
+  revenue_cents: number;
+}
+
+const PEAK_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const PEAK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function heatColor(value: number, max: number): string {
+  if (value <= 0 || max <= 0) return "transparent";
+  const pct = Math.max(8, Math.round((value / max) * 100));
+  return `color-mix(in srgb, var(--color-data-teal) ${pct}%, transparent)`;
+}
+
+function PeakPeriods({ branchId }: { branchId: string | null }) {
+  const [mode, setMode] = useState<"month" | "dow" | "hour">("month");
+
+  const q = useQuery(async () => {
+    const res = await createClient().rpc("f_peak_periods", { p_branch: branchId });
+    return unwrap(res) as PeakRow[];
+  }, [branchId]);
+
+  return (
+    <Card title="Peak periods">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <p className="text-[11px] text-text-muted">
+          Ticket traffic across all recorded history — darker is busier.
+        </p>
+        <div className="flex rounded-[4px] border border-border">
+          {([["month", "Month"], ["dow", "Day of the week"], ["hour", "Time"]] as const).map(
+            ([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setMode(key)}
+                className={`h-8 px-3 text-[13px] ${
+                  mode === key ? "bg-ink font-bold text-white" : "hover:bg-surface-page"
+                }`}
+              >
+                {label}
+              </button>
+            ),
+          )}
+        </div>
+      </div>
+
+      {q.status === "loading" && <SkeletonRows rows={4} cols={7} />}
+      {q.status === "error" && (
+        <ErrorState message="Peak periods did not load." onRetry={q.retry} />
+      )}
+      {q.status === "ready" && (
+        <>
+          {mode === "month" && <MonthDowHeatmap rows={q.data} />}
+          {mode === "dow" && (
+            <HeatStrip
+              cells={PEAK_DAYS.map((label, i) => ({
+                label,
+                value: q.data.find((r) => r.dim === "dow" && r.bucket === i + 1)?.tickets ?? 0,
+              }))}
+            />
+          )}
+          {mode === "hour" && <HourStrip rows={q.data} />}
+        </>
+      )}
+    </Card>
+  );
+}
+
+function MonthDowHeatmap({ rows }: { rows: PeakRow[] }) {
+  const cell = new Map<string, number>();
+  let max = 0;
+  for (const r of rows) {
+    if (r.dim !== "month_dow" || r.dow == null) continue;
+    cell.set(`${r.bucket}:${r.dow}`, r.tickets);
+    max = Math.max(max, r.tickets);
+  }
+  return (
+    <div className="overflow-x-auto">
+      <div className="grid min-w-[640px] gap-px"
+        style={{ gridTemplateColumns: "44px repeat(12, 1fr)" }}>
+        <div />
+        {PEAK_MONTHS.map((m) => (
+          <div key={m} className="pb-1 text-center text-[11px] font-bold text-text-muted">{m}</div>
+        ))}
+        {PEAK_DAYS.map((day, di) => (
+          <Fragment key={day}>
+            <div className="flex items-center text-[11px] font-bold text-text-muted">
+              {day}
+            </div>
+            {PEAK_MONTHS.map((_, mi) => {
+              const v = cell.get(`${mi + 1}:${di + 1}`) ?? 0;
+              return (
+                <div
+                  key={`${day}-${mi}`}
+                  title={`${day} in ${PEAK_MONTHS[mi]}: ${v.toLocaleString()} tickets`}
+                  className="flex h-9 items-center justify-center rounded-[2px] border border-border text-[11px] tnum"
+                  style={{ backgroundColor: heatColor(v, max) }}
+                >
+                  {v > 0 ? v : ""}
+                </div>
+              );
+            })}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HeatStrip({ cells }: { cells: Array<{ label: string; value: number }> }) {
+  const max = Math.max(...cells.map((c) => c.value), 0);
+  return (
+    <div className="grid gap-px" style={{ gridTemplateColumns: `repeat(${cells.length}, 1fr)` }}>
+      {cells.map((c) => (
+        <div key={c.label} className="text-center">
+          <div
+            title={`${c.label}: ${c.value.toLocaleString()} tickets`}
+            className="flex h-14 items-center justify-center rounded-[2px] border border-border text-[13px] font-bold tnum"
+            style={{ backgroundColor: heatColor(c.value, max) }}
+          >
+            {c.value > 0 ? c.value.toLocaleString() : ""}
+          </div>
+          <div className="mt-1 text-[11px] text-text-muted">{c.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HourStrip({ rows }: { rows: PeakRow[] }) {
+  const hours = rows.filter((r) => r.dim === "hour");
+  const withTimes = hours.reduce((s, r) => s + r.tickets, 0);
+  if (withTimes === 0) {
+    return (
+      <p className="text-[13px] text-text-muted">
+        No ticket start times recorded yet — this view fills in as the POS captures service
+        times on new tickets.
+      </p>
+    );
+  }
+  const byHour = new Map(hours.map((r) => [r.bucket, r.tickets]));
+  const present = hours.map((r) => r.bucket);
+  const lo = Math.min(8, ...present);
+  const hi = Math.max(20, ...present);
+  const cells = [];
+  for (let h = lo; h <= hi; h++) {
+    cells.push({ label: `${h}:00`, value: byHour.get(h) ?? 0 });
+  }
+  return (
+    <>
+      <HeatStrip cells={cells} />
+      <p className="mt-2 text-[11px] text-text-muted">
+        Based on the {withTimes.toLocaleString()} tickets that carry a start time — coverage
+        grows as the POS records times.
+      </p>
+    </>
   );
 }
 
