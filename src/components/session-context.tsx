@@ -23,6 +23,8 @@ interface SessionState {
   setBranchId: (id: string | null) => void;
   branch: Branch | null;
   isOwner: boolean;
+  /** Owner or admin — cross-branch scope, exports. */
+  isAdminUp: boolean;
   isManagerUp: boolean;
   canSeeAnalytics: boolean;
 }
@@ -36,11 +38,13 @@ export function SessionProvider({ profile, businesses, branches, children }: {
   children: ReactNode;
 }) {
   const homeBranch = branches.find((b) => b.id === profile.branch_id) ?? null;
+  // Owner and admin roam every branch; manager and front desk are pinned.
+  const crossBranch = profile.role === "owner" || profile.role === "admin";
   const [businessId, setBusinessIdState] = useState<string | null>(
     homeBranch?.business_id ?? businesses[0]?.id ?? null,
   );
   const [branchId, setBranchId] = useState<string | null>(
-    profile.role === "owner" ? null : profile.branch_id,
+    crossBranch ? null : profile.branch_id,
   );
 
   const value = useMemo<SessionState>(() => {
@@ -52,27 +56,28 @@ export function SessionProvider({ profile, businesses, branches, children }: {
       businessId,
       setBusinessId: (id) => {
         // Switching business resets the branch view to consolidated; a
-        // non-owner is pinned to their own business by their branch anyway.
-        if (!isOwner && id !== homeBranch?.business_id) return;
+        // branch-pinned role stays in their own business anyway.
+        if (!crossBranch && id !== homeBranch?.business_id) return;
         setBusinessIdState(id);
-        setBranchId(isOwner ? null : profile.branch_id);
+        setBranchId(crossBranch ? null : profile.branch_id);
       },
       business: businesses.find((b) => b.id === businessId) ?? null,
       branches: visibleBranches,
       branchId,
       setBranchId: (id) => {
-        // Non-owners cannot leave their branch; the UI never offers it, and
-        // RLS would return nothing if it did.
-        if (!isOwner && id !== profile.branch_id) return;
+        // Branch-pinned roles cannot leave their branch; the UI never offers
+        // it, and RLS would return nothing if it did.
+        if (!crossBranch && id !== profile.branch_id) return;
         setBranchId(id);
       },
       branch: visibleBranches.find((b) => b.id === branchId) ?? null,
       isOwner,
-      isManagerUp: isOwner || profile.role === "manager",
+      isAdminUp: crossBranch,
+      isManagerUp: crossBranch || profile.role === "manager",
       // Front desk: ticket entry, clients, expenses. No analytics (spec §3).
-      canSeeAnalytics: isOwner || profile.role === "manager",
+      canSeeAnalytics: crossBranch || profile.role === "manager",
     };
-  }, [profile, businesses, branches, businessId, branchId, homeBranch]);
+  }, [profile, businesses, branches, businessId, branchId, homeBranch, crossBranch]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

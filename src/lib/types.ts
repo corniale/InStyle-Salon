@@ -1,6 +1,6 @@
 // Domain types mirroring the database (supabase/migrations).
 
-export type Role = "owner" | "manager" | "front_desk";
+export type Role = "owner" | "admin" | "manager" | "front_desk";
 
 export interface Profile {
   id: string;

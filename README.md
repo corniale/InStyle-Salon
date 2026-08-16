@@ -103,3 +103,12 @@ These are working defaults, all reversible, flagged for client confirmation:
 - Offline covers the POS write path only. Queued tickets survive restarts,
   sync in order, replay safely (idempotency keys), and surface a visible
   "needs attention" list when the server rejects them.
+
+## Backlog
+
+- Define the Admin role's exact accesses (0020 gives it an interim shape:
+  manager powers across all branches, plus exports; owner-only ground —
+  settings, catalogue, staff accounts, audit log — stays owner-only).
+- Tickets view: period filters with pagination, and a ticket search box.
+- Inquiry funnel and appointments (Stage 2), timekeeping, banlaw
+  settlement modelling.

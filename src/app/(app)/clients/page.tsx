@@ -66,7 +66,7 @@ export default function ClientsPage() {
 }
 
 function ClientsList() {
-  const { canSeeAnalytics, isOwner } = useSession();
+  const { canSeeAnalytics, isAdminUp } = useSession();
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -223,7 +223,7 @@ function ClientsList() {
             className="w-64"
             aria-label="Search clients"
           />
-          {isOwner && (
+          {isAdminUp && (
             <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
               Export CSV
             </Button>

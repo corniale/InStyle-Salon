@@ -62,7 +62,7 @@ const TICKET_ACC: Record<string, (t: TicketRow) => unknown> = {
 };
 
 export default function TicketsPage() {
-  const { branchId, branches, isManagerUp, isOwner } = useSession();
+  const { branchId, branches, isManagerUp, isAdminUp } = useSession();
   const [date, setDate] = useState(todayISO());
   const [voidTarget, setVoidTarget] = useState<TicketRow | null>(null);
 
@@ -118,7 +118,7 @@ export default function TicketsPage() {
             className="w-40"
             aria-label="Ticket date"
           />
-          {isOwner && (
+          {isAdminUp && (
             <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
               Export CSV
             </Button>

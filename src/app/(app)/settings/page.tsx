@@ -895,7 +895,7 @@ function UsersTab({ branches }: { branches: Branch[] }) {
                   <RoleSelect profile={p} branches={branches} onChanged={q.retry} />
                 </Td>
                 <Td>
-                  {p.role === "owner" ? (
+                  {p.role === "owner" || p.role === "admin" ? (
                     "All branches"
                   ) : (
                     <BranchSelect profile={p} branches={branches} onChanged={q.retry} />
@@ -932,8 +932,11 @@ function RoleSelect({ profile, branches, onChanged }: {
           .from("profiles")
           .update({
             role,
-            // A non-owner must have a branch (schema constraint).
-            branch_id: role === "owner" ? profile.branch_id : profile.branch_id ?? branches[0]?.id,
+            // Owner and admin roam all branches; manager and front desk
+            // must have a home branch (schema constraint).
+            branch_id: role === "owner" || role === "admin"
+              ? null
+              : profile.branch_id ?? branches[0]?.id,
           })
           .eq("id", profile.id);
         setBusy(false);
@@ -941,6 +944,7 @@ function RoleSelect({ profile, branches, onChanged }: {
       }}
     >
       <option value="owner">Owner</option>
+      <option value="admin">Admin</option>
       <option value="manager">Branch manager</option>
       <option value="front_desk">Front desk</option>
     </Select>
