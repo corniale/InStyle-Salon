@@ -286,13 +286,15 @@ function HourStrip({ rows }: { rows: PeakRow[] }) {
       </p>
     );
   }
+  const fmtHour = (h: number) =>
+    h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`;
   const byHour = new Map(hours.map((r) => [r.bucket, r.tickets]));
   const present = hours.map((r) => r.bucket);
   const lo = Math.min(8, ...present);
   const hi = Math.max(20, ...present);
   const cells = [];
   for (let h = lo; h <= hi; h++) {
-    cells.push({ label: `${h}:00`, value: byHour.get(h) ?? 0 });
+    cells.push({ label: fmtHour(h), value: byHour.get(h) ?? 0 });
   }
   return (
     <>
