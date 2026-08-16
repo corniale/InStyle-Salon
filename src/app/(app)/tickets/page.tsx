@@ -62,7 +62,7 @@ const TICKET_ACC: Record<string, (t: TicketRow) => unknown> = {
 };
 
 export default function TicketsPage() {
-  const { branchId, branches, isManagerUp } = useSession();
+  const { branchId, branches, isManagerUp, isOwner } = useSession();
   const [date, setDate] = useState(todayISO());
   const [voidTarget, setVoidTarget] = useState<TicketRow | null>(null);
 
@@ -118,9 +118,11 @@ export default function TicketsPage() {
             className="w-40"
             aria-label="Ticket date"
           />
-          <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
-            Export CSV
-          </Button>
+          {isOwner && (
+            <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
+              Export CSV
+            </Button>
+          )}
           <Link href="/tickets/new">
             <Button variant="primary">Add ticket</Button>
           </Link>
@@ -221,12 +223,20 @@ export default function TicketsPage() {
                     <Td align="right" className="tnum">{formatCentavos(share)}</Td>
                     <Td align="right">
                       {isManagerUp && !voided && (
-                        <button
-                          className="text-[11px] text-brand-red hover:underline"
-                          onClick={() => setVoidTarget(t)}
-                        >
-                          Void
-                        </button>
+                        <span className="flex items-center justify-end gap-3">
+                          <Link
+                            href={`/tickets/new?revise=${t.id}`}
+                            className="text-[11px] hover:underline"
+                          >
+                            Revise
+                          </Link>
+                          <button
+                            className="text-[11px] text-brand-red hover:underline"
+                            onClick={() => setVoidTarget(t)}
+                          >
+                            Void
+                          </button>
+                        </span>
                       )}
                     </Td>
                   </tr>

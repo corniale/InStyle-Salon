@@ -18,7 +18,7 @@ import { PeriodPicker, periodPreset, type Period } from "@/components/period-pic
 import { csvPesos, downloadCsv } from "@/lib/csv";
 
 export default function DashboardPage() {
-  const { branchId, canSeeAnalytics } = useSession();
+  const { branchId, canSeeAnalytics, isOwner } = useSession();
   const router = useRouter();
   const [period, setPeriod] = useState<Period>(periodPreset("today"));
 
@@ -44,7 +44,7 @@ export default function DashboardPage() {
         <h1 className="text-[20px] font-bold">Dashboard</h1>
         <div className="flex flex-wrap items-center gap-2">
           <PeriodPicker value={period} onChange={setPeriod} withPastMonths />
-          <ExportDetailButton branchId={branchId} from={from} to={to} />
+          {isOwner && <ExportDetailButton branchId={branchId} from={from} to={to} />}
         </div>
       </div>
 

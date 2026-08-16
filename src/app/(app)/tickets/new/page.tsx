@@ -11,8 +11,8 @@
 // - Submit carries a client-generated idempotency key. Offline or on network
 //   failure the ticket queues locally and the UI confirms immediately.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
@@ -23,7 +23,7 @@ import type {
   Technician, TicketPayload,
 } from "@/lib/types";
 import {
-  Button, Card, ErrorState, Field, Input, Select, SkeletonRows, Truncate,
+  Button, Card, ErrorState, Field, Input, Select, SkeletonRows, Textarea, Truncate,
 } from "@/components/ui";
 import { enqueueTicket } from "@/lib/offline/queue";
 import { MONTH_SHORT, formatClientNo } from "@/components/client-bits";
@@ -65,7 +65,18 @@ function emptyLine(): LineDraft {
 }
 
 export default function NewTicketPage() {
+  return (
+    <Suspense>
+      <NewTicketForm />
+    </Suspense>
+  );
+}
+
+function NewTicketForm() {
   const router = useRouter();
+  // Revising an existing ticket (manager+): the form pre-fills from the
+  // original; saving voids it and creates the correction in one act.
+  const reviseId = useSearchParams().get("revise");
   const { branchId, branches, profile } = useSession();
   // Front desk / manager: their branch. Owner on consolidated: default to
   // the first branch — a sale always happens somewhere — with the picker
@@ -238,6 +249,74 @@ export default function NewTicketPage() {
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const idemKey = useRef<string>(crypto.randomUUID());
+  const [remarks, setRemarks] = useState("");
+  const [reviseSeries, setReviseSeries] = useState<string | null>(null);
+  const revisePrefilled = useRef(false);
+
+  // Pre-fill everything from the original ticket being revised.
+  useEffect(() => {
+    if (!reviseId || revisePrefilled.current) return;
+    revisePrefilled.current = true;
+    void (async () => {
+      const { data } = await createClient()
+        .from("tickets")
+        .select("*, clients(*), ticket_lines(*), ticket_payments(*)")
+        .eq("id", reviseId)
+        .maybeSingle();
+      if (!data) return;
+      const t = data as unknown as {
+        branch_id: string; ticket_date: string; series_no: string | null;
+        is_new_client: boolean; voided_at: string | null;
+        clients: Client;
+        ticket_lines: Array<{
+          service_id: string; technician_id: string; assist_technician_id: string | null;
+          qty: number; unit_price_cents: number; discount_type: string | null;
+          discount_cents: number; rating: number | null; line_number: number;
+          is_upsell: boolean; started_at: string | null; ended_at: string | null;
+        }>;
+        ticket_payments: Array<{ method: PaymentMethod; amount_cents: number; reference: string | null }>;
+      };
+      const toTime = (iso: string | null) =>
+        iso ? new Date(iso).toTimeString().slice(0, 5) : "";
+      setReviseSeries(t.series_no);
+      setFormBranchId(t.branch_id);
+      setTicketDate(t.ticket_date);
+      applyClient(t.clients);
+      setIsNewClient(t.is_new_client);
+      setLines(
+        [...t.ticket_lines]
+          .sort((a, b) => a.line_number - b.line_number)
+          .map((l) => {
+            const gross = l.unit_price_cents * l.qty;
+            const pct = gross > 0 ? Math.round((l.discount_cents / gross) * 10000) / 100 : 0;
+            return {
+              key: nextKey(),
+              service_id: l.service_id,
+              technician_id: l.technician_id,
+              assist_technician_id: l.assist_technician_id ?? "",
+              qty: l.qty,
+              priceInput: String(l.unit_price_cents / 100),
+              discount_type: (l.discount_type ?? "") as LineDraft["discount_type"],
+              discountInput: pct > 0 ? String(pct) : "",
+              rating: l.rating ?? "",
+              package_id: "",
+              is_upsell: l.is_upsell,
+              startedAt: toTime(l.started_at),
+              endedAt: toTime(l.ended_at),
+            };
+          }),
+      );
+      setPayments(
+        t.ticket_payments.map((p) => ({
+          key: nextKey(),
+          method: p.method,
+          amountInput: String(p.amount_cents / 100),
+          reference: p.reference ?? "",
+        })),
+      );
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviseId]);
 
   // Warn before navigating away from unsaved work (spec §6).
   useEffect(() => {
@@ -329,6 +408,9 @@ export default function NewTicketPage() {
     if (paymentTotal !== ticketTotal)
       e.payments = `Payments come to ${formatCentavos(paymentTotal)} but the ticket totals ${formatCentavos(ticketTotal)}.`;
 
+    if (reviseId && remarks.trim() === "")
+      e.remarks = "Remarks are required — say why this ticket is being revised.";
+
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -392,7 +474,13 @@ export default function NewTicketPage() {
 
     try {
       const supabase = createClient();
-      const { error } = await supabase.rpc("create_ticket", { p_payload: payload });
+      const { error } = reviseId
+        ? await supabase.rpc("revise_ticket", {
+            p_original: reviseId,
+            p_remarks: remarks.trim(),
+            p_payload: payload,
+          })
+        : await supabase.rpc("create_ticket", { p_payload: payload });
 
       if (!error && matched && matched.birth_month == null && birthMonth !== "" && birthDay !== "") {
         // Heard at the register: fill in a missing birthday on the existing
@@ -406,10 +494,12 @@ export default function NewTicketPage() {
 
       if (error) {
         // Network-ish failures queue; validation failures surface (spec §9).
+        // Revisions never queue — voiding the original offline would be
+        // invisible, so the admin retries with the connection back.
         const transient =
           !navigator.onLine ||
           /fetch|network|timeout|failed to/i.test(error.message);
-        if (transient) {
+        if (transient && !reviseId) {
           await enqueueTicket(payload, {
             clientLabel,
             totalCents: ticketTotal,
@@ -419,7 +509,9 @@ export default function NewTicketPage() {
           router.push("/tickets");
           return;
         }
-        setSubmitError(friendlyDbError(error.message));
+        setSubmitError(transient
+          ? "The connection failed — the revision was not saved. Try again once back online."
+          : friendlyDbError(error.message));
         setBusy(false);
         return;
       }
@@ -428,6 +520,11 @@ export default function NewTicketPage() {
       router.push("/tickets");
     } catch {
       // Complete transport failure — the queue, not an error (edge case 34).
+      if (reviseId) {
+        setSubmitError("The connection failed — the revision was not saved. Try again once back online.");
+        setBusy(false);
+        return;
+      }
       await enqueueTicket(payload, {
         clientLabel,
         totalCents: ticketTotal,
@@ -439,10 +536,12 @@ export default function NewTicketPage() {
   }
 
   // ---- render -------------------------------------------------------------
+  const pageTitle = reviseId ? "Revise ticket" : "Add ticket";
+
   if (ref.status === "loading") {
     return (
       <div className="space-y-6">
-        <h1 className="text-[20px] font-bold">Add ticket</h1>
+        <h1 className="text-[20px] font-bold">{pageTitle}</h1>
         <Card><SkeletonRows rows={6} cols={4} /></Card>
       </div>
     );
@@ -450,7 +549,7 @@ export default function NewTicketPage() {
   if (ref.status === "error") {
     return (
       <div className="space-y-6">
-        <h1 className="text-[20px] font-bold">Add ticket</h1>
+        <h1 className="text-[20px] font-bold">{pageTitle}</h1>
         <ErrorState
           message="The service list did not load, so a ticket cannot be entered yet."
           onRetry={ref.retry}
@@ -476,7 +575,21 @@ export default function NewTicketPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <h1 className="text-[20px] font-bold">Add ticket</h1>
+      <h1 className="text-[20px] font-bold">{pageTitle}</h1>
+
+      {reviseId && (
+        <Card title={`Revising ticket ${reviseSeries ?? ""}`}>
+          <p className="mb-4 text-[11px] text-text-muted">
+            Saving voids the original and creates a corrected ticket. Both stay on record,
+            cross-referenced, and the void is audited.
+          </p>
+          <Field label="Remarks (required)" error={errors.remarks}
+            hint="Why is this ticket being revised? Kept with the voided original.">
+            <Textarea value={remarks} invalid={!!errors.remarks}
+              onChange={(e) => { markDirty(); setRemarks(e.target.value); }} />
+          </Field>
+        </Card>
+      )}
 
       <Card title="Client">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -974,7 +1087,7 @@ export default function NewTicketPage() {
             Cancel
           </Button>
           <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void submit()}>
-            Save ticket
+            {reviseId ? "Save revision" : "Save ticket"}
           </Button>
         </div>
       </div>

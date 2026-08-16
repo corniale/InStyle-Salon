@@ -43,7 +43,7 @@ interface TechRow {
 }
 
 export default function TechniciansPage() {
-  const { branchId, canSeeAnalytics } = useSession();
+  const { branchId, canSeeAnalytics, isOwner } = useSession();
   const [period, setPeriod] = useState<Period>(periodPreset("month"));
   const { from, to } = period;
 
@@ -88,9 +88,11 @@ export default function TechniciansPage() {
         <h1 className="text-[20px] font-bold">Technicians</h1>
         <div className="flex flex-wrap items-center gap-2">
           <PeriodPicker value={period} onChange={setPeriod} withRange />
-          <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
-            Export CSV
-          </Button>
+          {isOwner && (
+            <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 

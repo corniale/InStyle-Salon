@@ -53,7 +53,7 @@ interface ExpenseRow {
 }
 
 export default function CashPage() {
-  const { branchId, branches } = useSession();
+  const { branchId, branches, isOwner } = useSession();
   const [period, setPeriod] = useState<Period>(periodPreset("today"));
 
   // The header's branch switcher is the only branch filter. "All" shows each
@@ -117,9 +117,11 @@ export default function CashPage() {
         <h1 className="text-[20px] font-bold">Daily cash</h1>
         <div className="flex flex-wrap items-center gap-2">
           <PeriodPicker value={period} onChange={setPeriod} />
-          <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
-            Export CSV
-          </Button>
+          {isOwner && (
+            <Button busy={exporting} busyLabel="Exporting" onClick={() => void exportCsv()}>
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 
