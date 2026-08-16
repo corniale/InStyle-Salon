@@ -23,10 +23,10 @@ import type {
   Technician, TicketPayload,
 } from "@/lib/types";
 import {
-  Button, Card, ErrorState, Field, Input, Select, SkeletonRows,
+  Button, Card, ErrorState, Field, Input, Select, SkeletonRows, Truncate,
 } from "@/components/ui";
 import { enqueueTicket } from "@/lib/offline/queue";
-import { MONTH_SHORT } from "@/components/client-bits";
+import { MONTH_SHORT, formatClientNo } from "@/components/client-bits";
 
 interface PriceRow { service_id: string; price_cents: number; sharing_rate: number | null; effective_from: string }
 
@@ -123,20 +123,96 @@ export default function NewTicketPage() {
   const [birthDay, setBirthDay] = useState("");
   const [matched, setMatched] = useState<Client | null>(null);
   const [clientPackages, setClientPackages] = useState<(Package & { services: { name: string } })[]>([]);
-  // Auto-follows the phone lookup (no match = new), editable when the front
+  // Auto-follows the lookup (no match = new), editable when the front
   // desk knows better; the server stores whichever value is sent.
   const [isNewClient, setIsNewClient] = useState(true);
+  // Name-or-phone directory search; a picked result owns the match until
+  // cleared, so the exact-phone effect below stays out of the way.
+  const [clientSearch, setClientSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<Client[]>([]);
+  const [selected, setSelected] = useState<Client | null>(null);
 
-  // Live lookup once the phone is complete (edge case 2: surface, offer, reuse).
+  async function loadPackages(clientId: string) {
+    const { data: pkgs } = await createClient()
+      .from("packages")
+      .select("*, services(name)")
+      .eq("client_id", clientId);
+    if (pkgs) {
+      setClientPackages(
+        (pkgs as (Package & { services: { name: string } })[]).filter(
+          (p) =>
+            p.sessions_used < p.sessions_total &&
+            (!p.expires_on || p.expires_on >= new Date().toLocaleDateString("sv-SE")),
+        ),
+      );
+    }
+  }
+
+  function applyClient(client: Client) {
+    markDirty();
+    setSelected(client);
+    setMatched(client);
+    setIsNewClient(false);
+    setClientName(client.full_name ?? "");
+    setTown(client.town ?? "");
+    setBarangay(client.barangay ?? "");
+    setPhone(client.phone_declined ? "" : client.phone);
+    setPhoneDeclined(client.phone_declined);
+    setClientPackages([]);
+    setClientSearch("");
+    setSearchResults([]);
+    void loadPackages(client.id);
+  }
+
+  function clearClient() {
+    setSelected(null);
+    setMatched(null);
+    setClientPackages([]);
+    setIsNewClient(true);
+    setClientName("");
+    setTown("");
+    setBarangay("");
+    setPhone("");
+    setPhoneDeclined(false);
+  }
+
+  // Directory search: a name shows every match with the number beside it;
+  // digits search the phone column instead.
   useEffect(() => {
+    const term = clientSearch.trim();
+    if (selected || term.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    const handle = setTimeout(() => {
+      void (async () => {
+        let query = createClient()
+          .from("clients")
+          .select("*")
+          .is("merged_into_id", null)
+          .eq("is_pool", false)
+          .order("full_name", { ascending: true, nullsFirst: false })
+          .limit(8);
+        query = /^[\d\s-]+$/.test(term)
+          ? query.like("phone", `%${term.replace(/\D/g, "")}%`)
+          : query.ilike("full_name", `%${term}%`);
+        const { data } = await query;
+        setSearchResults((data ?? []) as Client[]);
+      })();
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [clientSearch, selected]);
+
+  // Exact-phone lookup still works (edge case 2: surface, offer, reuse).
+  useEffect(() => {
+    if (selected) return;
     let alive = true;
     setMatched(null);
     setClientPackages([]);
     setIsNewClient(true);
     if (phoneDeclined || !/^\d{11}$/.test(phone)) return;
-    const supabase = createClient();
     void (async () => {
-      const { data } = await supabase
+      const { data } = await createClient()
         .from("clients").select("*").eq("phone", phone).maybeSingle();
       if (!alive || !data) return;
       const client = data as Client;
@@ -145,22 +221,10 @@ export default function NewTicketPage() {
       setClientName(client.full_name ?? "");
       setTown(client.town ?? "");
       setBarangay(client.barangay ?? "");
-      const { data: pkgs } = await supabase
-        .from("packages")
-        .select("*, services(name)")
-        .eq("client_id", client.id);
-      if (alive && pkgs) {
-        setClientPackages(
-          (pkgs as (Package & { services: { name: string } })[]).filter(
-            (p) =>
-              p.sessions_used < p.sessions_total &&
-              (!p.expires_on || p.expires_on >= new Date().toLocaleDateString("sv-SE")),
-          ),
-        );
-      }
+      void loadPackages(client.id);
     })();
     return () => { alive = false; };
-  }, [phone, phoneDeclined]);
+  }, [phone, phoneDeclined, selected]);
 
   // ---- lines and payments -------------------------------------------------
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
@@ -416,17 +480,59 @@ export default function NewTicketPage() {
 
       <Card title="Client">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <Field
+              label="Find client (name or phone)"
+              hint="Type a name — every match shows with its number — or part of a number. Leave blank for a brand-new client."
+            >
+              <div className="relative">
+                <Input
+                  placeholder="e.g. EMMA or 0917…"
+                  value={clientSearch}
+                  onChange={(e) => setClientSearch(e.target.value)}
+                  aria-label="Find client by name or phone"
+                />
+                {searchResults.length > 0 && (
+                  <div className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-[4px] border border-border bg-surface-card">
+                    {searchResults.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="flex w-full items-baseline justify-between gap-4 px-3 py-2 text-left text-[13px] hover:bg-surface-page"
+                        onClick={() => applyClient(c)}
+                      >
+                        <span className="font-bold">
+                          <Truncate text={c.full_name ?? "Walk-in"} max={28} />
+                        </span>
+                        <span className="shrink-0 text-[11px] text-text-muted tnum">
+                          {c.phone_declined ? "no number" : c.phone}
+                          {" · "}{formatClientNo(c.client_no)}
+                          {c.town ? ` · ${c.town}` : ""}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {clientSearch.trim().length >= 2 && searchResults.length === 0 && (
+                  <p className="mt-1 text-[11px] text-text-muted">
+                    No client found — enter their details below to create them.
+                  </p>
+                )}
+              </div>
+            </Field>
+          </div>
+
           <Field
             label="Phone number"
             error={errors.phone}
-            hint={phoneDeclined ? undefined : "Required. This is how visits link into one client record."}
+            hint={phoneDeclined ? undefined : "Required for new clients. Phone numbers can change — the client record survives the change."}
           >
             <Input
               inputMode="numeric"
               placeholder="09XXXXXXXXX"
               value={phone}
               maxLength={11}
-              disabled={phoneDeclined}
+              disabled={phoneDeclined || !!selected}
               invalid={!!errors.phone}
               onChange={(e) => {
                 markDirty();
@@ -439,10 +545,11 @@ export default function NewTicketPage() {
               <input
                 type="checkbox"
                 checked={phoneDeclined}
+                disabled={!!selected}
                 onChange={(e) => {
                   markDirty();
+                  clearClient();
                   setPhoneDeclined(e.target.checked);
-                  if (e.target.checked) { setPhone(""); setMatched(null); }
                 }}
               />
               Walk-in, declined to give a number
@@ -452,6 +559,13 @@ export default function NewTicketPage() {
           {matched && (
             <div className="sm:col-span-2 rounded-[4px] bg-surface-page p-2 text-[13px]">
               Existing client: <span className="font-bold">{matched.full_name ?? matched.phone}</span>
+              <span className="text-text-muted tnum"> · {formatClientNo(matched.client_no)}</span>
+              <button
+                className="ml-2 text-[11px] text-brand-red hover:underline"
+                onClick={clearClient}
+              >
+                Clear
+              </button>
               {matched.first_visit_on && (
                 <span className="text-text-muted"> · first visit {matched.first_visit_on}</span>
               )}
