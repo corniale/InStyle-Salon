@@ -39,6 +39,7 @@ interface DailyCashRow {
   maya_takings_cents: number;
   bank_card_takings_cents: number;
   package_comp_cents: number;
+  gift_cert_cents: number;
 }
 
 interface ExpenseRow {
@@ -112,6 +113,7 @@ function aggregateDays(rows: DailyCashRow[]): DailyCashRow | null {
     maya_takings_cents: sum((r) => r.maya_takings_cents),
     bank_card_takings_cents: sum((r) => r.bank_card_takings_cents),
     package_comp_cents: sum((r) => r.package_comp_cents),
+    gift_cert_cents: sum((r) => r.gift_cert_cents),
   };
 }
 
@@ -217,6 +219,10 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
               {(day?.package_comp_cents ?? 0) !== 0 && (
                 <StmtRow label="Package / comp (no cash received)"
                   cents={day?.package_comp_cents ?? 0} negative />
+              )}
+              {(day?.gift_cert_cents ?? 0) !== 0 && (
+                <StmtRow label="Gift certificates (no cash received)"
+                  cents={day?.gift_cert_cents ?? 0} negative />
               )}
               <StmtRow label="Cash expenses & withdrawals"
                 cents={day?.cash_expenses_cents ?? 0} negative />

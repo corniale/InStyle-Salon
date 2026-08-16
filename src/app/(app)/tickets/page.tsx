@@ -45,6 +45,11 @@ function todayISO(): string {
 const clientLabel = (t: TicketRow) =>
   t.clients?.full_name ?? (t.clients?.phone_declined ? "Walk-in" : (t.clients?.phone ?? "—"));
 
+const PAYMENT_LABEL: Record<string, string> = {
+  cash: "Cash", online: "Online", split: "Split",
+  package: "Package", comp: "Comp", gift_cert: "Gift cert",
+};
+
 const TICKET_ACC: Record<string, (t: TicketRow) => unknown> = {
   ticket: (t) => t.series_no,
   client: clientLabel,
@@ -183,7 +188,7 @@ export default function TicketsPage() {
                         max={22}
                       />
                     </Td>
-                    <Td>{t.payment_method}</Td>
+                    <Td>{PAYMENT_LABEL[t.payment_method] ?? t.payment_method}</Td>
                     <Td align="right" className="tnum">{formatCentavos(total)}</Td>
                     <Td align="right" className="tnum">{formatCentavos(share)}</Td>
                     <Td align="right">

@@ -67,7 +67,7 @@ function MonthlyTrend({ branchId }: { branchId: string | null }) {
                 points: q.data.map((m) => ({ label: m.month.slice(0, 7), value: m.revenue_cents })),
               },
               {
-                name: "Sales, net commissions",
+                name: "Sales, net of commissions",
                 color: "var(--color-data-teal)",
                 dashed: true,
                 points: q.data.map((m) => ({ label: m.month.slice(0, 7), value: m.company_share_cents })),

@@ -119,12 +119,16 @@ export default function NewTicketPage() {
   const [birthDay, setBirthDay] = useState("");
   const [matched, setMatched] = useState<Client | null>(null);
   const [clientPackages, setClientPackages] = useState<(Package & { services: { name: string } })[]>([]);
+  // Auto-follows the phone lookup (no match = new), editable when the front
+  // desk knows better; the server stores whichever value is sent.
+  const [isNewClient, setIsNewClient] = useState(true);
 
   // Live lookup once the phone is complete (edge case 2: surface, offer, reuse).
   useEffect(() => {
     let alive = true;
     setMatched(null);
     setClientPackages([]);
+    setIsNewClient(true);
     if (phoneDeclined || !/^\d{11}$/.test(phone)) return;
     const supabase = createClient();
     void (async () => {
@@ -133,6 +137,7 @@ export default function NewTicketPage() {
       if (!alive || !data) return;
       const client = data as Client;
       setMatched(client);
+      setIsNewClient(false);
       setClientName(client.full_name ?? "");
       setTown(client.town ?? "");
       setBarangay(client.barangay ?? "");
@@ -192,10 +197,17 @@ export default function NewTicketPage() {
   }
 
   // ---- derived totals -----------------------------------------------------
+  // Discounts are entered as a percentage; the peso amount is computed here
+  // and stored in centavos, so the books stay exact.
+  function lineDiscountCents(l: LineDraft): number {
+    const unit = parsePesos(l.priceInput) ?? 0;
+    const pct = Number(l.discountInput || "0");
+    if (!Number.isFinite(pct) || pct <= 0) return 0;
+    return Math.round((unit * l.qty * Math.min(pct, 100)) / 100);
+  }
   const lineTotals = lines.map((l) => {
     const unit = parsePesos(l.priceInput) ?? 0;
-    const discount = parsePesos(l.discountInput || "0") ?? 0;
-    return Math.max(unit * l.qty - discount, 0);
+    return Math.max(unit * l.qty - lineDiscountCents(l), 0);
   });
   const ticketTotal = lineTotals.reduce((a, b) => a + b, 0);
   const paymentTotal = payments.reduce((a, p) => a + (parsePesos(p.amountInput || "0") ?? 0), 0);
@@ -215,15 +227,14 @@ export default function NewTicketPage() {
 
     lines.forEach((l, i) => {
       const unit = parsePesos(l.priceInput);
-      const discount = parsePesos(l.discountInput || "0");
+      const pct = l.discountInput === "" ? 0 : Number(l.discountInput);
       if (!l.service_id) e[`line-${l.key}-service`] = "Pick a service.";
       if (!l.technician_id) e[`line-${l.key}-tech`] = "Pick a technician.";
       if (l.assist_technician_id && l.assist_technician_id === l.technician_id)
         e[`line-${l.key}-assist`] = "Assist must be a different person.";
       if (unit == null || unit < 0) e[`line-${l.key}-price`] = "Enter the price in pesos.";
-      if (discount == null || discount < 0) e[`line-${l.key}-discount`] = "Discount cannot be negative.";
-      if (unit != null && discount != null && discount > unit * l.qty)
-        e[`line-${l.key}-discount`] = "Discount is larger than the line total.";
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100)
+        e[`line-${l.key}-discount`] = "Discount must be 0 to 100 percent.";
       if (l.qty < 1) e[`line-${l.key}-qty`] = "Quantity must be at least 1.";
       void i;
     });
@@ -256,6 +267,7 @@ export default function NewTicketPage() {
             },
       started_at: startedAt ? new Date(`${ticketDate}T${startedAt}`).toISOString() : undefined,
       ended_at: endedAt ? new Date(`${ticketDate}T${endedAt}`).toISOString() : undefined,
+      is_new_client: isNewClient,
       lines: lines.map((l) => {
         const service = serviceById.get(l.service_id);
         const price = priceBook.get(l.service_id);
@@ -266,7 +278,7 @@ export default function NewTicketPage() {
           qty: l.qty,
           unit_price_cents: parsePesos(l.priceInput) ?? 0,
           discount_type: l.discount_type || undefined,
-          discount_cents: parsePesos(l.discountInput || "0") ?? 0,
+          discount_cents: lineDiscountCents(l),
           // Copied at time of sale (spec §7.1): branch override, else default.
           sharing_rate: price?.sharing_rate ?? service?.default_sharing_rate ?? 0.5,
           rating: l.rating === "" ? undefined : l.rating,
@@ -476,13 +488,25 @@ export default function NewTicketPage() {
               <Select value={inquirySource}
                 onChange={(e) => { markDirty(); setInquirySource(e.target.value); }}>
                 <option value="">—</option>
-                <option>Walk-in</option>
-                <option>Facebook</option>
+                <option>Calls</option>
                 <option>Referral</option>
-                <option>Regular</option>
+                <option>Social Media</option>
+                <option>Walk-in</option>
+                <option>Others</option>
               </Select>
             </Field>
           )}
+
+          <div className="flex items-end pb-1 sm:col-span-2">
+            <label className="flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={isNewClient}
+                onChange={(e) => { markDirty(); setIsNewClient(e.target.checked); }}
+              />
+              New client (first visit) — unticked means returning
+            </label>
+          </div>
         </div>
       </Card>
 
@@ -597,7 +621,13 @@ export default function NewTicketPage() {
                       <option value="package">Package</option>
                     </Select>
                   </Field>
-                  <Field label="Discount (₱)" error={errors[`line-${line.key}-discount`]}>
+                  <Field
+                    label="Discount (%)"
+                    error={errors[`line-${line.key}-discount`]}
+                    hint={lineDiscountCents(line) > 0
+                      ? `− ${formatCentavos(lineDiscountCents(line))}`
+                      : undefined}
+                  >
                     <Input
                       inputMode="decimal" value={line.discountInput}
                       invalid={!!errors[`line-${line.key}-discount`]}
@@ -613,7 +643,7 @@ export default function NewTicketPage() {
                           updateLine(line.key, {
                             package_id: e.target.value,
                             ...(pkg
-                              ? { discount_type: "package" as const, discountInput: line.priceInput }
+                              ? { discount_type: "package" as const, discountInput: "100" }
                               : {}),
                           });
                         }}
@@ -632,8 +662,8 @@ export default function NewTicketPage() {
                 </div>
 
                 <div className="mt-4 flex items-center justify-between">
-                  <span className="text-[13px] text-text-muted tnum">
-                    Line total {formatCentavos(lineTotals[lines.indexOf(line)])}
+                  <span className="text-[15px] font-bold tnum">
+                    Sub-total {formatCentavos(lineTotals[lines.indexOf(line)])}
                   </span>
                   {lines.length > 1 && (
                     <button
@@ -673,6 +703,11 @@ export default function NewTicketPage() {
           </Field>
         </div>
 
+        <div className="mt-4 flex items-baseline justify-between border-y border-border py-2">
+          <span className="text-[15px] font-bold">Total</span>
+          <span className="text-[15px] font-bold tnum">{formatCentavos(ticketTotal)}</span>
+        </div>
+
         <div className="mt-4 space-y-2">
           {payments.map((p) => (
             <div key={p.key} className="flex items-end gap-4">
@@ -690,6 +725,7 @@ export default function NewTicketPage() {
                   <option value="maya">Maya</option>
                   <option value="bank">Bank transfer</option>
                   <option value="card">Card</option>
+                  <option value="gift_cert">Gift cert</option>
                   <option value="package">Package</option>
                   <option value="comp">Comp</option>
                 </Select>

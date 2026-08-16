@@ -85,7 +85,8 @@ export interface Client {
   merged_into_id: string | null;
 }
 
-export type PaymentMethod = "cash" | "gcash" | "maya" | "bank" | "card" | "package" | "comp";
+export type PaymentMethod =
+  "cash" | "gcash" | "maya" | "bank" | "card" | "package" | "comp" | "gift_cert";
 
 export interface Ticket {
   id: string;
@@ -95,7 +96,7 @@ export interface Ticket {
   ticket_date: string;
   started_at: string | null;
   ended_at: string | null;
-  payment_method: "cash" | "online" | "split" | "package" | "comp";
+  payment_method: "cash" | "online" | "split" | "package" | "comp" | "gift_cert";
   online_ref: string | null;
   is_new_client: boolean;
   idempotency_key: string;
@@ -176,6 +177,8 @@ export interface TicketPayload {
   started_at?: string;
   ended_at?: string;
   online_ref?: string;
+  /** Overrides the history-derived flag when the front desk knows better. */
+  is_new_client?: boolean;
   lines: Array<{
     service_id: string;
     technician_id: string;

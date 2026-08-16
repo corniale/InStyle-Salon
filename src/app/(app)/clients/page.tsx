@@ -24,6 +24,7 @@ interface ClientRow {
   phone_declined: boolean;
   full_name: string | null;
   town: string | null;
+  inquiry_source: string | null;
   first_visit_on: string | null;
 }
 
@@ -41,6 +42,8 @@ const CLIENT_ACC: Record<string, (c: ClientListRow) => unknown> = {
   name: (c) => c.full_name ?? (c.phone_declined ? "Walk-in" : c.phone),
   phone: (c) => (c.phone_declined ? null : c.phone),
   town: (c) => c.town,
+  discovery: (c) => c.inquiry_source,
+  type: (c) => (c.ret == null ? null : c.ret.visit_count > 1 ? "Returning" : "New"),
   visits: (c) => c.ret?.visit_count ?? null,
   spend: (c) => c.ret?.lifetime_spend_cents ?? null,
   status: (c) => c.ret?.status ?? null,
@@ -83,7 +86,7 @@ function ClientsList() {
     const supabase = createClient();
     let query = supabase
       .from("clients")
-      .select("id, phone, phone_declined, full_name, town, first_visit_on", { count: "exact" })
+      .select("id, phone, phone_declined, full_name, town, inquiry_source, first_visit_on", { count: "exact" })
       .is("merged_into_id", null)
       .order("full_name", { ascending: true, nullsFirst: false })
       .range(page * PAGE, page * PAGE + PAGE - 1);
@@ -157,8 +160,10 @@ function ClientsList() {
                   <Th {...th("name")}>Name</Th>
                   <Th {...th("phone")}>Phone</Th>
                   <Th {...th("town")}>Town</Th>
+                  <Th {...th("discovery")}>Client discovery method</Th>
                   {canSeeAnalytics && (
                     <>
+                      <Th {...th("type")}>Client type</Th>
                       <Th align="right" {...th("visits")}>Visits</Th>
                       <Th align="right" {...th("spend")}>Lifetime spend</Th>
                       <Th {...th("status")}>Status</Th>
@@ -181,8 +186,14 @@ function ClientsList() {
                       </Td>
                       <Td className="tnum">{c.phone_declined ? "declined" : c.phone}</Td>
                       <Td>{c.town ?? "—"}</Td>
+                      <Td>{c.inquiry_source ?? "—"}</Td>
                       {canSeeAnalytics && (
                         <>
+                          <Td>
+                            {r == null ? "—" : r.visit_count > 1 ? "Returning" : (
+                              <span className="font-bold text-data-teal">New</span>
+                            )}
+                          </Td>
                           <Td align="right" className="tnum">{r?.visit_count ?? "—"}</Td>
                           <Td align="right" className="tnum">
                             {r ? formatCentavos(r.lifetime_spend_cents) : "—"}

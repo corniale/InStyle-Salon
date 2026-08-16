@@ -233,7 +233,7 @@ function SalesTrendTile({ branchId, from, to }: {
               points: q.data.map((d) => ({ label: d.day, value: d.revenue_cents })),
             },
             {
-              name: "Sales, net commissions",
+              name: "Sales, net of commissions",
               color: "var(--color-data-teal)",
               dashed: true,
               points: q.data.map((d) => ({ label: d.day, value: d.company_share_cents })),
@@ -291,7 +291,7 @@ interface PayRow { method: string; tickets: number; amount_cents: number; share_
 
 const METHOD_LABEL: Record<string, string> = {
   cash: "Cash", gcash: "GCash", maya: "Maya", bank: "Bank", card: "Card",
-  package: "Package", comp: "Comp",
+  package: "Package", comp: "Comp", gift_cert: "Gift cert",
 };
 
 function PaymentMixTile({ branchId, from, to }: { branchId: string | null; from: string; to: string }) {
