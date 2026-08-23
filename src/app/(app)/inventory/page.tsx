@@ -599,13 +599,14 @@ function DeliveryModal({ open, products, branches, onClose, onDone }: {
     <Modal title="Record delivery" open={open} onClose={onClose}>
       <div className="space-y-4">
         <ProductBranchFields f={f} products={products} branches={branches} />
-        <div className="flex gap-4">
+        {/* Wrap, never squeeze: squeezed date inputs overflow their border. */}
+        <div className="flex flex-wrap gap-4">
           <Field label="Quantity">
             <Input inputMode="numeric" value={f.qtyInput} className="w-24"
               onChange={(e) => f.setQtyInput(e.target.value)} />
           </Field>
           <Field label="Unit cost (₱)" hint="Blank if unknown">
-            <Input inputMode="decimal" value={costInput} className="w-32"
+            <Input inputMode="decimal" value={costInput} className="w-28"
               onChange={(e) => setCostInput(e.target.value)} />
           </Field>
           <Field label="Date">
@@ -704,7 +705,7 @@ function TakeOutModal({ open, adjust, products, branches, onClose, onDone }: {
           </p>
         )}
         <ProductBranchFields f={f} products={products} branches={branches} />
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-4">
           {adjust && (
             <Field label="Direction">
               <Select value={direction} className="w-40"

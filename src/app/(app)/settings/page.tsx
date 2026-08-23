@@ -788,7 +788,7 @@ function ProductModal({ open, product, businessId, onClose, onDone }: {
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         </Field>
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-4">
           <Field label="Unit" hint="bottle, sachet, box, pc…">
             <Input value={unit} className="w-32" onChange={(e) => setUnit(e.target.value)} />
           </Field>
