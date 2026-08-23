@@ -75,8 +75,21 @@ function ClientsList() {
   // local state so typing never fights the router.
   const urlQ = sp.get("q") ?? "";
   const page = Math.max(0, (Number(sp.get("page")) || 1) - 1);
+  // `search` is what's typed (instant); `term` is the debounced value that
+  // actually queries — typing "MARIA" fires one request, not five, and the
+  // table never blanks mid-word.
   const [search, setSearch] = useState(urlQ);
-  useEffect(() => { setSearch(urlQ); }, [urlQ]);
+  const [term, setTerm] = useState(urlQ);
+  useEffect(() => { setSearch(urlQ); setTerm(urlQ); }, [urlQ]);
+  useEffect(() => {
+    if (search === term) return;
+    const handle = setTimeout(() => {
+      setTerm(search);
+      syncUrl(search, 0);
+    }, 300);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   const listParams = new URLSearchParams();
   if (urlQ.trim() !== "") listParams.set("q", urlQ);
@@ -103,7 +116,7 @@ function ClientsList() {
       .order("id", { ascending: true })
       .range(page * PAGE, page * PAGE + PAGE - 1);
 
-    const s = search.trim();
+    const s = term.trim();
     if (s !== "") {
       query = /^\d+$/.test(s)
         ? query.like("phone", `%${s}%`)
@@ -126,7 +139,7 @@ function ClientsList() {
       rows: rows.map((c) => ({ ...c, ret: retention.get(c.id) ?? null })),
       total: res.count ?? rows.length,
     };
-  }, [search, page, canSeeAnalytics]);
+  }, [term, page, canSeeAnalytics]);
 
   const { rows, th } = useSort(q.status === "ready" ? q.data.rows : null, CLIENT_ACC);
   const [exporting, setExporting] = useState(false);
@@ -163,7 +176,7 @@ function ClientsList() {
           .order("full_name", { ascending: true, nullsFirst: false })
           .order("id")
           .range(offset, offset + 999);
-        const s = search.trim();
+        const s = term.trim();
         if (s !== "") {
           query = /^\d+$/.test(s)
             ? query.like("phone", `%${s}%`)
@@ -234,7 +247,7 @@ function ClientsList() {
             <Input
               placeholder="Search name or phone"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); syncUrl(e.target.value, 0); }}
+              onChange={(e) => setSearch(e.target.value)}
               aria-label="Search clients"
             />
           </span>

@@ -1152,8 +1152,12 @@ function CostingTab({ branches }: { branches: Branch[] }) {
     : 0;
   const ohRate = minutes > 0 ? pool / minutes : 0; // centavos per minute
 
-  const computed: CostingComputed[] | null = q.status === "ready"
-    ? q.data.rows.map((r) => {
+  // Memoised: without this, any unrelated state change (opening the recipe
+  // modal, a router tick) rebuilt and re-sorted every row on weak tablets.
+  const costingData = q.status === "ready" ? q.data : null;
+  const computed: CostingComputed[] | null = useMemo(() => costingData == null
+    ? null
+    : costingData.rows.map((r) => {
         const priceInput = whatIf[r.service_id];
         const price = priceInput != null && priceInput.trim() !== ""
           ? parsePesos(priceInput)
@@ -1177,8 +1181,8 @@ function CostingTab({ branches }: { branches: Branch[] }) {
           margin_pct: price > 0 ? (margin / price) * 100 : null,
           contribution_cents: Math.round((margin * r.treatments_90d) / 3),
         };
-      })
-    : null;
+      }),
+    [costingData, whatIf, ohRate]);
 
   const { rows, th } = useSort(computed, COSTING_ACC);
 

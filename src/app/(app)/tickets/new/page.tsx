@@ -30,6 +30,79 @@ import { MONTH_SHORT, formatClientNo } from "@/components/client-bits";
 
 interface PriceRow { service_id: string; price_cents: number; sharing_rate: number | null; effective_from: string }
 
+// ---------------------------------------------------------------------------
+// Reference-data cache. The catalogue and roster change weekly at most, but
+// this page opens for every single sale — without a cache the front desk
+// pays four round trips of latency per ticket. Five minutes of staleness is
+// the accepted trade (a price change published mid-shift reaches every
+// tablet within that window; a reload fetches it immediately).
+// ---------------------------------------------------------------------------
+
+interface TicketRefShared {
+  types: ServiceType[];
+  services: Service[];
+  technicians: Technician[];
+}
+interface TicketRef extends TicketRefShared { prices: PriceRow[] }
+
+const REF_TTL_MS = 5 * 60_000;
+const refCache = new Map<string, { at: number; data: unknown }>();
+
+function cached<T>(key: string): T | null {
+  const hit = refCache.get(key);
+  return hit && Date.now() - hit.at < REF_TTL_MS ? (hit.data as T) : null;
+}
+
+async function loadTicketRef(branchId: string): Promise<TicketRef> {
+  const supabase = createClient();
+
+  async function fetchShared(): Promise<TicketRefShared> {
+    const [types, services, technicians] = await Promise.all([
+      supabase.from("service_types").select("*").order("sort_order"),
+      supabase.from("services").select("*").eq("active", true).order("name"),
+      supabase.from("technicians").select("*").eq("active", true).order("full_name"),
+    ]);
+    const data = {
+      types: unwrap(types) as ServiceType[],
+      services: unwrap(services) as Service[],
+      technicians: unwrap(technicians) as Technician[],
+    };
+    refCache.set("shared", { at: Date.now(), data });
+    return data;
+  }
+
+  async function fetchPrices(): Promise<PriceRow[]> {
+    if (!branchId) return [];
+    // Full history, paged past the 1,000-row cap: the CURRENT price of a
+    // long-stable service can be an old row.
+    const PAGE = 1000;
+    const all: PriceRow[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const res = await supabase
+        .from("branch_service_prices")
+        .select("service_id, price_cents, sharing_rate, effective_from")
+        .eq("branch_id", branchId)
+        .lte("effective_from", new Date().toLocaleDateString("sv-SE"))
+        .order("effective_from", { ascending: false })
+        .order("service_id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      const chunk = unwrap(res) as PriceRow[];
+      all.push(...chunk);
+      if (chunk.length < PAGE) break;
+    }
+    refCache.set(`prices:${branchId}`, { at: Date.now(), data: all });
+    return all;
+  }
+
+  // Shared and per-branch parts cache independently, so an owner switching
+  // the form's branch refetches only the price list, not the whole set.
+  const [shared, prices] = await Promise.all([
+    cached<TicketRefShared>("shared") ?? fetchShared(),
+    cached<PriceRow[]>(`prices:${branchId}`) ?? fetchPrices(),
+  ]);
+  return { ...shared, prices };
+}
+
 interface LineDraft {
   key: number;
   service_id: string;
@@ -91,28 +164,14 @@ function NewTicketForm() {
   );
 
   // ---- reference data -----------------------------------------------------
-  const ref = useQuery(async () => {
-    const supabase = createClient();
-    const [types, services, technicians, prices] = await Promise.all([
-      supabase.from("service_types").select("*").order("sort_order"),
-      supabase.from("services").select("*").eq("active", true).order("name"),
-      supabase.from("technicians").select("*").eq("active", true).order("full_name"),
-      formBranchId
-        ? supabase
-            .from("branch_service_prices")
-            .select("service_id, price_cents, sharing_rate, effective_from")
-            .eq("branch_id", formBranchId)
-            .lte("effective_from", new Date().toLocaleDateString("sv-SE"))
-            .order("effective_from", { ascending: false })
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-    return {
-      types: unwrap(types) as ServiceType[],
-      services: unwrap(services) as Service[],
-      technicians: unwrap(technicians) as Technician[],
-      prices: unwrap(prices as { data: PriceRow[] | null; error: { message: string } | null }) as PriceRow[],
-    };
-  }, [formBranchId]);
+  // The busiest page in the salon: it opens for every sale, and the
+  // catalogue/roster change weekly at most. A short-lived module cache makes
+  // the second and every later "Add ticket" render instantly, and a branch
+  // switch refetches only the prices — the one branch-dependent piece.
+  const ref = useQuery(
+    () => loadTicketRef(formBranchId),
+    [formBranchId],
+  );
 
   // Latest price per service (list already sorted newest-first).
   const priceBook = useMemo(() => {

@@ -207,33 +207,41 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
 
   const q = useQuery(async () => {
     const supabase = createClient();
-    const daysReq = supabase
-      .from("v_daily_cash")
-      .select("*")
-      .eq("branch_id", branchId)
-      .gte("business_date", from)
-      .lte("business_date", to)
-      .order("business_date", { ascending: true });
     // A YTD period can exceed the 1,000-row response cap, and the card's
     // Total sums every row — page through so nothing is silently dropped.
-    const PAGE = 1000;
-    const expenses: ExpenseRow[] = [];
-    for (let offset = 0; ; offset += PAGE) {
-      const res = await supabase
-        .from("expenses")
-        .select("id, spent_on, category, amount_cents, description, paid_from")
-        .eq("branch_id", branchId)
-        .gte("spent_on", from)
-        .lte("spent_on", to)
-        .order("spent_on", { ascending: false })
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: true })
-        .range(offset, offset + PAGE - 1);
-      const chunk = unwrap(res) as ExpenseRow[];
-      expenses.push(...chunk);
-      if (chunk.length < PAGE) break;
+    // Runs in parallel with the statement query: the headline numbers must
+    // never wait on the expense list.
+    async function fetchExpenses(): Promise<ExpenseRow[]> {
+      const PAGE = 1000;
+      const all: ExpenseRow[] = [];
+      for (let offset = 0; ; offset += PAGE) {
+        const res = await supabase
+          .from("expenses")
+          .select("id, spent_on, category, amount_cents, description, paid_from")
+          .eq("branch_id", branchId)
+          .gte("spent_on", from)
+          .lte("spent_on", to)
+          .order("spent_on", { ascending: false })
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
+          .range(offset, offset + PAGE - 1);
+        const chunk = unwrap(res) as ExpenseRow[];
+        all.push(...chunk);
+        if (chunk.length < PAGE) break;
+      }
+      return all;
     }
-    const rows = unwrap(await daysReq) as DailyCashRow[];
+    const [days, expenses] = await Promise.all([
+      supabase
+        .from("v_daily_cash")
+        .select("*")
+        .eq("branch_id", branchId)
+        .gte("business_date", from)
+        .lte("business_date", to)
+        .order("business_date", { ascending: true }),
+      fetchExpenses(),
+    ]);
+    const rows = unwrap(days) as DailyCashRow[];
     return {
       day: single ? (rows[0] ?? null) : aggregateDays(rows),
       dayCount: rows.length,
@@ -498,6 +506,7 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
   error: boolean;
   onChanged: () => void;
 }) {
+  const { profile } = useSession();
   const { rows: sortedExpenses, th } = useSort(expenses, EXPENSE_ACC);
   // Month/YTD views can hold hundreds of expense lines — page them at 50.
   const EXPENSES_PAGE = 50;
@@ -520,16 +529,16 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
     }
     setBusy(true);
     setFieldError(null);
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    const { error } = await supabase.from("expenses").insert({
+    // recorded_by comes from the session context — an auth.getUser() here
+    // would cost a full network round trip before the insert even starts.
+    const { error } = await createClient().from("expenses").insert({
       branch_id: branchId,
       spent_on: date,
       category,
       amount_cents: cents,
       description: description.trim() || null,
       paid_from: paidFrom,
-      recorded_by: user?.id,
+      recorded_by: profile.id,
     });
     setBusy(false);
     if (error) {
@@ -749,49 +758,12 @@ function TechnicianEarningsCard({ branchId, from, to }: {
   to: string;
 }) {
   const q = useQuery(async () => {
-    // A year of lines exceeds the 1,000-row response cap, so page through.
-    const supabase = createClient();
-    const PAGE = 1000;
-    const lines: Array<{
-      technician_name: string;
-      qty: number;
-      total_cents: number;
-      company_share_cents: number;
-      technician_share_cents: number;
-    }> = [];
-    for (let offset = 0; ; offset += PAGE) {
-      const res = await supabase
-        .from("v_ticket_lines_active")
-        .select("line_id, technician_name, qty, total_cents, company_share_cents, technician_share_cents")
-        .eq("branch_id", branchId)
-        .gte("ticket_date", from)
-        .lte("ticket_date", to)
-        // Date first: new lines land on today (the last pages), so rows a
-        // concurrent save inserts can't shift already-fetched pages.
-        .order("ticket_date", { ascending: true })
-        .order("line_id", { ascending: true })
-        .range(offset, offset + PAGE - 1);
-      const chunk = unwrap(res) as typeof lines;
-      lines.push(...chunk);
-      if (chunk.length < PAGE) break;
-    }
-    const byTech = new Map<string, EarningsRow>();
-    for (const l of lines) {
-      const row = byTech.get(l.technician_name) ?? {
-        technician_name: l.technician_name,
-        lines: 0, treatments: 0, revenue_cents: 0,
-        company_share_cents: 0, technician_share_cents: 0,
-      };
-      row.lines += 1;
-      row.treatments += l.qty;
-      row.revenue_cents += l.total_cents;
-      row.company_share_cents += l.company_share_cents;
-      row.technician_share_cents += l.technician_share_cents;
-      byTech.set(l.technician_name, row);
-    }
-    return [...byTech.values()].sort(
-      (a, b) => b.technician_share_cents - a.technician_share_cents,
-    );
+    // Aggregated server-side (0032): the old client-side sum downloaded
+    // every ticket line of the period — dozens of round trips on YTD.
+    const res = await createClient().rpc("f_technician_earnings", {
+      p_branch: branchId, p_from: from, p_to: to,
+    });
+    return unwrap(res) as EarningsRow[];
   }, [branchId, from, to]);
 
   const { rows, th } = useSort(q.status === "ready" ? q.data : null, EARNINGS_ACC);

@@ -515,9 +515,12 @@ interface Divergence {
 function PriceDivergenceTile() {
   const { isOwner, businessId } = useSession();
   const q = useQuery(async () => {
+    // Only the owner can ever see this tile — nobody else should pay for
+    // the RPC on every dashboard load.
+    if (!isOwner) return [] as Divergence[];
     const res = await createClient().rpc("f_price_divergence", { p_business: businessId });
     return unwrap(res) as Divergence[];
-  }, [businessId]);
+  }, [businessId, isOwner]);
 
   if (!isOwner || q.status !== "ready" || q.data.length === 0) return null;
 

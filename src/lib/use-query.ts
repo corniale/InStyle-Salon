@@ -17,7 +17,7 @@ import { createClient } from "@/lib/supabase/client";
 export type QueryState<T> =
   | { status: "loading"; data?: undefined; error?: undefined }
   | { status: "error"; data?: undefined; error: string }
-  | { status: "ready"; data: T; error?: undefined };
+  | { status: "ready"; data: T; error?: undefined; refreshing?: boolean };
 
 export function useQuery<T>(
   fetcher: () => Promise<T>,
@@ -30,7 +30,13 @@ export function useQuery<T>(
 
   useEffect(() => {
     let alive = true;
-    setState({ status: "loading" });
+    // Stale-while-refetch: a filter/branch/period change keeps the current
+    // rows on screen while the new ones load, instead of blanking to a
+    // skeleton for a full round trip. Skeletons still show on first load.
+    setState((s) =>
+      s.status === "ready"
+        ? { status: "ready", data: s.data, refreshing: true }
+        : { status: "loading" });
 
     void (async () => {
       const attempts = 3;

@@ -97,7 +97,9 @@ export default function InventoryPage() {
       .eq("business_id", businessId)
       .order("name");
     return unwrap(res) as ProductOpt[];
-  }, [businessId, nonce]);
+    // Not keyed on nonce: recording a movement changes stock, never the
+    // catalogue — refetching it would only flicker the dropdowns.
+  }, [businessId]);
 
   const stockQ = useQuery(async () => {
     const res = await createClient()
@@ -563,6 +565,7 @@ function DeliveryModal({ open, products, branches, onClose, onDone }: {
   onClose: () => void;
   onDone: () => void;
 }) {
+  const profileId = useSession().profile.id;
   const f = useMoveForm(open, branches);
   const [costInput, setCostInput] = useState("");
   const [supplier, setSupplier] = useState("");
@@ -607,7 +610,6 @@ function DeliveryModal({ open, products, branches, onClose, onDone }: {
     f.setBusy(true);
     f.setError(null);
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
     const product = products.find((p) => p.id === f.productId);
 
     let expenseId: string | null = null;
@@ -621,7 +623,7 @@ function DeliveryModal({ open, products, branches, onClose, onDone }: {
           amount_cents: totalCents,
           description: `${qty} ${product?.unit ?? ""} ${product?.name ?? "product"}${supplier.trim() ? ` — ${supplier.trim()}` : ""}`,
           paid_from: paidFrom,
-          recorded_by: user?.id,
+          recorded_by: profileId,
         })
         .select("id")
         .single();
@@ -643,7 +645,7 @@ function DeliveryModal({ open, products, branches, onClose, onDone }: {
       supplier: supplier.trim() || null,
       note: f.note.trim() || null,
       expense_id: expenseId,
-      recorded_by: user?.id,
+      recorded_by: profileId,
     });
     f.setBusy(false);
     if (error) {
@@ -719,6 +721,7 @@ function TakeOutModal({ open, adjust, products, branches, onClose, onDone }: {
   onClose: () => void;
   onDone: () => void;
 }) {
+  const profileId = useSession().profile.id;
   const f = useMoveForm(open, branches);
   const [direction, setDirection] = useState<"adjust_out" | "adjust_in">("adjust_out");
   useEffect(() => { if (open) setDirection("adjust_out"); }, [open]);
@@ -734,16 +737,14 @@ function TakeOutModal({ open, adjust, products, branches, onClose, onDone }: {
     }
     f.setBusy(true);
     f.setError(null);
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    const { error } = await supabase.from("stock_moves").insert({
+    const { error } = await createClient().from("stock_moves").insert({
       product_id: f.productId,
       branch_id: f.branchIdSel,
       moved_on: f.date,
       kind: adjust ? direction : "usage",
       qty,
       note: f.note.trim() || null,
-      recorded_by: user?.id,
+      recorded_by: profileId,
     });
     f.setBusy(false);
     if (error) {
