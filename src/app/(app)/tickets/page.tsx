@@ -1,10 +1,11 @@
 "use client";
 
-// Ticket list: today's (or a chosen day's) tickets for the branch view,
-// plus the offline queue — pending and needs-attention — so nothing queued
-// is ever invisible (spec §9).
+// Ticket list: browse by period (Today · This month · Year to date · a
+// chosen day) or search the whole history by ticket number, client name or
+// phone; plus the offline queue — pending and needs-attention — so nothing
+// queued is ever invisible (spec §9).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
@@ -16,10 +17,10 @@ import {
 } from "@/components/ui";
 import { csvPesos, downloadCsv } from "@/lib/csv";
 import { Pagination } from "@/components/client-bits";
+import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 import { listQueue, removeFromQueue, type QueuedTicket } from "@/lib/offline/queue";
 import { drainQueue } from "@/lib/offline/sync";
 import { onQueueChanged } from "@/lib/offline/queue";
-import { useEffect } from "react";
 
 interface TicketRow {
   id: string;
@@ -55,6 +56,7 @@ const PAYMENT_LABEL: Record<string, string> = {
 
 const TICKET_ACC: Record<string, (t: TicketRow) => unknown> = {
   ticket: (t) => t.series_no,
+  date: (t) => t.ticket_date,
   client: clientLabel,
   services: (t) => t.ticket_lines.map((l) => l.services?.name ?? "?").join(", "),
   technician: (t) => t.ticket_lines.map((l) => l.technicians?.full_name ?? "?").join(", "),
@@ -63,35 +65,98 @@ const TICKET_ACC: Record<string, (t: TicketRow) => unknown> = {
   share: (t) => t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0),
 };
 
+const TICKET_COLS =
+  "id, series_no, ticket_date, status, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(id, full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))";
+// Same columns, but the client join is inner so the query can filter the
+// ticket by the client's name or phone.
+const TICKET_COLS_INNER = TICKET_COLS.replace("clients(", "clients!inner(");
+
+const TICKETS_PAGE = 50;
+const SEARCH_CAP = 200;
+
 export default function TicketsPage() {
   const { branchId, branches, isManagerUp, isAdminUp } = useSession();
-  const [date, setDate] = useState(todayISO());
+  const [period, setPeriod] = useState<Period>(periodPreset("today"));
   const [voidTarget, setVoidTarget] = useState<TicketRow | null>(null);
 
-  const TICKET_COLS =
-    "id, series_no, ticket_date, status, payment_method, is_new_client, voided_at, void_reason, branch_id, clients(id, full_name, phone, phone_declined), ticket_lines(total_cents, company_share_cents, qty, rating, services(name), technicians!ticket_lines_technician_id_fkey(full_name))";
+  // Search finds a ticket anywhere in history — ticket number, client name,
+  // or phone. It deliberately ignores the period filter: hunting last
+  // month's ticket must not silently come up empty because "Today" is on.
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    const handle = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
+  const searching = search.length >= 2;
+
+  const { from, to } = period;
+  const single = from === to;
+
+  const [page, setPage] = useState(0);
+  useEffect(() => { setPage(0); }, [branchId, from, to, search]);
 
   const q = useQuery(async () => {
-    // Page past the 1,000-row response cap — the table and the CSV export
-    // must both cover the whole day, however busy it was.
     const supabase = createClient();
-    const PAGE = 1000;
-    const all: TicketRow[] = [];
-    for (let offset = 0; ; offset += PAGE) {
+
+    if (!searching) {
+      // Browse: one server page of the period, with the exact total.
       let query = supabase
         .from("tickets")
-        .select(TICKET_COLS)
-        .eq("ticket_date", date)
+        .select(TICKET_COLS, { count: "exact" })
+        .gte("ticket_date", from)
+        .lte("ticket_date", to)
+        .order("ticket_date", { ascending: false })
         .order("created_at", { ascending: false })
         .order("id", { ascending: true })
-        .range(offset, offset + PAGE - 1);
+        .range(page * TICKETS_PAGE, page * TICKETS_PAGE + TICKETS_PAGE - 1);
       if (branchId) query = query.eq("branch_id", branchId);
-      const chunk = unwrap(await query) as unknown as TicketRow[];
-      all.push(...chunk);
-      if (chunk.length < PAGE) break;
+      const res = await query;
+      const rows = unwrap(res) as unknown as TicketRow[];
+      return { rows, total: res.count ?? rows.length, capped: false };
     }
-    return all;
-  }, [branchId, date]);
+
+    // Search: ticket-number matches and client matches, merged. Digits
+    // search phones as well as ticket numbers; text searches names.
+    const digits = search.replace(/\D/g, "");
+    const isDigits = /^[\d\s-]+$/.test(search) && digits.length > 0;
+
+    let bySeries = supabase.from("tickets").select(TICKET_COLS)
+      .ilike("series_no", `%${search}%`);
+    if (branchId) bySeries = bySeries.eq("branch_id", branchId);
+    let byClient = isDigits
+      ? supabase.from("tickets").select(TICKET_COLS_INNER)
+          .like("clients.phone", `%${digits}%`)
+      : supabase.from("tickets").select(TICKET_COLS_INNER)
+          .ilike("clients.full_name", `%${search}%`);
+    if (branchId) byClient = byClient.eq("branch_id", branchId);
+
+    const [seriesRes, clientRes] = await Promise.all([
+      bySeries.order("ticket_date", { ascending: false })
+        .order("created_at", { ascending: false }).limit(SEARCH_CAP),
+      byClient.order("ticket_date", { ascending: false })
+        .order("created_at", { ascending: false }).limit(SEARCH_CAP),
+    ]);
+    const seriesRows = unwrap(seriesRes) as unknown as TicketRow[];
+    const clientRows = unwrap(clientRes) as unknown as TicketRow[];
+
+    const seen = new Set<string>();
+    const rows: TicketRow[] = [];
+    for (const t of [...seriesRows, ...clientRows]) {
+      if (!seen.has(t.id)) {
+        seen.add(t.id);
+        rows.push(t);
+      }
+    }
+    rows.sort((a, b) => (a.ticket_date < b.ticket_date ? 1 : a.ticket_date > b.ticket_date ? -1 : 0));
+    return {
+      rows,
+      total: rows.length,
+      capped: seriesRows.length >= SEARCH_CAP || clientRows.length >= SEARCH_CAP,
+    };
+    // While browsing, page is a server-side input; while searching, the
+    // slice is client-side, so the dep pins to 0 and page turns skip refetch.
+  }, [branchId, from, to, search, searching ? 0 : page]);
 
   // Open tickets are shown whatever day they were parked on — one parked
   // just before midnight must still be findable (and billable) tomorrow,
@@ -108,53 +173,102 @@ export default function TicketsPage() {
     return unwrap(await query) as unknown as TicketRow[];
   }, [branchId]);
 
-  const { rows, th } = useSort(q.status === "ready" ? q.data : null, TICKET_ACC);
+  const { rows, th } = useSort(q.status === "ready" ? q.data.rows : null, TICKET_ACC);
+  // Browsing is server-paginated (rows already ARE one page); search results
+  // arrive whole and page client-side.
+  const displayRows = rows == null
+    ? null
+    : searching
+      ? rows.slice(page * TICKETS_PAGE, page * TICKETS_PAGE + TICKETS_PAGE)
+      : rows;
+  const total = q.status === "ready" ? q.data.total : 0;
+  const showDate = searching || !single;
 
-  // Long days render in pages of 50 so the table stays snappy.
-  const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [branchId, date]);
-  const TICKETS_PAGE = 50;
-  const pagedRows = rows?.slice(page * TICKETS_PAGE, page * TICKETS_PAGE + TICKETS_PAGE) ?? null;
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(false);
 
-  function exportCsv() {
+  // CSV of the whole filtered set — every ticket of the period while
+  // browsing (fetched in 1,000-row pages), or every match while searching.
+  async function exportCsv() {
     if (q.status !== "ready") return;
-    downloadCsv(
-      `tickets-${date}.csv`,
-      ["Ticket", "Date", "Client", "Phone", "Services", "Technicians", "Payment",
-       "Total", "Company share", "New client", "Status", "Void reason"],
-      q.data.map((t) => [
-        t.series_no,
-        t.ticket_date,
-        clientLabel(t),
-        t.clients?.phone_declined ? "declined" : t.clients?.phone,
-        t.ticket_lines.map((l) =>
-          l.qty > 1 ? `${l.services?.name ?? "?"} ×${l.qty}` : (l.services?.name ?? "?")).join(", "),
-        [...new Set(t.ticket_lines.map((l) => l.technicians?.full_name ?? "?"))].join(", "),
-        PAYMENT_LABEL[t.payment_method] ?? t.payment_method,
-        csvPesos(t.ticket_lines.reduce((s, l) => s + l.total_cents, 0)),
-        csvPesos(t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0)),
-        t.is_new_client ? "yes" : "",
-        t.voided_at != null ? "void" : t.status,
-        t.void_reason,
-      ]),
-    );
+    setExporting(true);
+    setExportError(false);
+    try {
+      let all: TicketRow[];
+      if (searching) {
+        all = q.data.rows;
+      } else {
+        const supabase = createClient();
+        const PAGE = 1000;
+        all = [];
+        for (let offset = 0; ; offset += PAGE) {
+          let query = supabase
+            .from("tickets")
+            .select(TICKET_COLS)
+            .gte("ticket_date", from)
+            .lte("ticket_date", to)
+            .order("ticket_date", { ascending: true })
+            .order("id", { ascending: true })
+            .range(offset, offset + PAGE - 1);
+          if (branchId) query = query.eq("branch_id", branchId);
+          const chunk = unwrap(await query) as unknown as TicketRow[];
+          all.push(...chunk);
+          if (chunk.length < PAGE) break;
+        }
+      }
+      downloadCsv(
+        searching
+          ? `tickets-search-${search.replace(/[^\w-]+/g, "-")}.csv`
+          : `tickets-${from}-to-${to}.csv`,
+        ["Ticket", "Date", "Client", "Phone", "Services", "Technicians", "Payment",
+         "Total", "Company share", "New client", "Status", "Void reason"],
+        all.map((t) => [
+          t.series_no,
+          t.ticket_date,
+          clientLabel(t),
+          t.clients?.phone_declined ? "declined" : t.clients?.phone,
+          t.ticket_lines.map((l) =>
+            l.qty > 1 ? `${l.services?.name ?? "?"} ×${l.qty}` : (l.services?.name ?? "?")).join(", "),
+          [...new Set(t.ticket_lines.map((l) => l.technicians?.full_name ?? "?"))].join(", "),
+          PAYMENT_LABEL[t.payment_method] ?? t.payment_method,
+          csvPesos(t.ticket_lines.reduce((s, l) => s + l.total_cents, 0)),
+          csvPesos(t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0)),
+          t.is_new_client ? "yes" : "",
+          t.voided_at != null ? "void" : t.status,
+          t.void_reason,
+        ]),
+      );
+    } catch {
+      setExportError(true);
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Tickets</h1>
-        <div className="flex items-center gap-4">
-          <span className="w-40 shrink-0">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <span className="w-64 shrink-0">
             <Input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              aria-label="Ticket date"
+              placeholder="Search ticket #, name or phone"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              aria-label="Search tickets"
             />
           </span>
+          <PeriodPicker value={period} onChange={setPeriod} />
+          {exportError && (
+            <span className="text-[11px] text-brand-red">Export failed — try again.</span>
+          )}
           {isAdminUp && (
-            <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
+            <Button
+              busy={exporting}
+              busyLabel="Exporting"
+              disabled={q.status !== "ready" || q.data.rows.length === 0}
+              onClick={() => void exportCsv()}
+            >
               Export CSV
             </Button>
           )}
@@ -233,15 +347,19 @@ export default function TicketsPage() {
             onRetry={q.retry}
           />
         )}
-        {q.status === "ready" && q.data.length === 0 && (
+        {q.status === "ready" && q.data.rows.length === 0 && (
           <EmptyState
             message={
-              date === todayISO()
-                ? "No tickets today. Add ticket."
-                : "No tickets on this day."
+              searching
+                ? "No tickets match this search — any date, any status."
+                : single && from === todayISO()
+                  ? "No tickets today. Add ticket."
+                  : single
+                    ? "No tickets on this day."
+                    : "No tickets in this period."
             }
             action={
-              date === todayISO() ? (
+              !searching && single && from === todayISO() ? (
                 <Link href="/tickets/new">
                   <Button variant="primary">Add ticket</Button>
                 </Link>
@@ -249,11 +367,19 @@ export default function TicketsPage() {
             }
           />
         )}
+        {q.status === "ready" && searching && q.data.rows.length > 0 && (
+          <p className="mb-2 text-[11px] text-text-muted">
+            {q.data.capped
+              ? `Showing the first ${q.data.rows.length} matches across all dates — narrow the search to see the rest.`
+              : `Matches across all dates, newest first.`}
+          </p>
+        )}
         {rows != null && rows.length > 0 && (
           <Table>
             <thead>
               <tr>
                 <Th {...th("ticket")}>Ticket</Th>
+                {showDate && <Th {...th("date")}>Date</Th>}
                 <Th {...th("client")}>Client</Th>
                 <Th {...th("services")}>Services</Th>
                 <Th {...th("technician")}>Technician</Th>
@@ -264,8 +390,8 @@ export default function TicketsPage() {
               </tr>
             </thead>
             <tbody>
-              {(pagedRows ?? []).map((t) => {
-                const total = t.ticket_lines.reduce((s, l) => s + l.total_cents, 0);
+              {(displayRows ?? []).map((t) => {
+                const rowTotal = t.ticket_lines.reduce((s, l) => s + l.total_cents, 0);
                 const share = t.ticket_lines.reduce((s, l) => s + l.company_share_cents, 0);
                 const voided = t.voided_at != null;
                 return (
@@ -294,6 +420,7 @@ export default function TicketsPage() {
                         </span>
                       )}
                     </Td>
+                    {showDate && <Td className="tnum">{t.ticket_date}</Td>}
                     <Td>
                       {t.clients ? (
                         <Link href={`/clients/detail?id=${t.clients.id}`}
@@ -325,7 +452,7 @@ export default function TicketsPage() {
                     <Td>{t.status === "open" && !voided
                       ? "—"
                       : (PAYMENT_LABEL[t.payment_method] ?? t.payment_method)}</Td>
-                    <Td align="right" className="tnum">{formatCentavos(total)}</Td>
+                    <Td align="right" className="tnum">{formatCentavos(rowTotal)}</Td>
                     <Td align="right" className="tnum">{formatCentavos(share)}</Td>
                     <Td align="right">
                       {!voided && (
@@ -364,10 +491,10 @@ export default function TicketsPage() {
             </tbody>
           </Table>
         )}
-        {rows != null && (
+        {q.status === "ready" && (
           <Pagination
             page={page}
-            total={rows.length}
+            total={total}
             onPage={setPage}
             noun="tickets"
             pageSize={TICKETS_PAGE}
