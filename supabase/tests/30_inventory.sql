@@ -23,6 +23,62 @@ begin
   end;
 end $$;
 
+-- Product details (0029): categories are data, identity is name+brand+size,
+-- SKUs are unique, the hierarchy is validated.
+do $$
+declare v_biz uuid; v_cat uuid; v_sub uuid; v_other_cat uuid;
+begin
+  select business_id into v_biz from public.branches where code = 'MAIN';
+
+  insert into public.product_categories (business_id, name)
+  values (v_biz, 'Hair care') returning id into v_cat;
+  insert into public.product_categories (business_id, parent_id, name)
+  values (v_biz, v_cat, 'Shampoo') returning id into v_sub;
+  insert into public.product_categories (business_id, name)
+  values (v_biz, 'Nail care') returning id into v_other_cat;
+
+  -- A sub-category cannot hang off another sub-category.
+  begin
+    insert into public.product_categories (business_id, parent_id, name)
+    values (v_biz, v_sub, 'Too deep');
+    raise exception 'three-level category accepted';
+  exception when check_violation then null;
+  end;
+
+  -- Same name, different brand/size: two legitimate products.
+  insert into public.products (business_id, name, brand, size, unit, sku,
+                               category_id, subcategory_id,
+                               standard_cost_cents, retail_price_cents)
+  values (v_biz, 'Shampoo 1L', 'Palmolive', '1 L', 'bottle', 'SH-PAL-1L',
+          v_cat, v_sub, 25000, 45000),
+         (v_biz, 'Shampoo 1L', 'Pantene', '1 L', 'bottle', 'SH-PAN-1L',
+          v_cat, v_sub, 30000, 52000);
+
+  -- …but the same name+brand+size trio is a duplicate.
+  begin
+    insert into public.products (business_id, name, brand, size)
+    values (v_biz, 'SHAMPOO 1L', 'palmolive', '1 l');
+    raise exception 'duplicate name+brand+size accepted';
+  exception when unique_violation then null;
+  end;
+
+  -- A SKU cannot repeat within the business.
+  begin
+    insert into public.products (business_id, name, sku)
+    values (v_biz, 'Different product', 'sh-pal-1l');
+    raise exception 'duplicate SKU accepted';
+  exception when unique_violation then null;
+  end;
+
+  -- A sub-category under the wrong category is refused.
+  begin
+    insert into public.products (business_id, name, category_id, subcategory_id)
+    values (v_biz, 'Miscategorised', v_other_cat, v_sub);
+    raise exception 'mismatched sub-category accepted';
+  exception when check_violation then null;
+  end;
+end $$;
+
 -- Front desk cannot touch the catalogue.
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000003', false);
 do $$

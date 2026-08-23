@@ -5,7 +5,7 @@
 // transfers. Corrections are opposite movements, never edits; the ledger
 // is the audit trail. Costing is a weighted average over deliveries.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -20,19 +20,32 @@ import { Pagination } from "@/components/client-bits";
 interface ProductOpt {
   id: string;
   name: string;
+  brand: string | null;
+  size: string | null;
   unit: string;
+  standard_cost_cents: number | null;
   active: boolean;
+}
+
+/** "Shampoo 1L — Palmolive, 1 L" — enough to tell look-alikes apart. */
+function productLabel(p: ProductOpt): string {
+  const detail = [p.brand, p.size].filter(Boolean).join(", ");
+  return detail ? `${p.name} — ${detail}` : p.name;
 }
 
 interface StockRow {
   product_id: string;
   product_name: string;
+  sku: string | null;
+  brand: string | null;
+  size: string | null;
   unit: string;
   low_stock_threshold: number;
   active: boolean;
   branch_id: string;
   on_hand: number;
   avg_cost_cents: number | null;
+  standard_cost_cents: number | null;
   value_cents: number;
   last_moved_on: string | null;
 }
@@ -48,6 +61,9 @@ interface ActivityRow {
   note: string | null;
   product_id: string;
   product_name: string;
+  sku: string | null;
+  brand: string | null;
+  size: string | null;
   unit: string;
   branch_id: string;
   branch_name: string;
@@ -77,7 +93,7 @@ export default function InventoryPage() {
   const productsQ = useQuery(async () => {
     const res = await createClient()
       .from("products")
-      .select("id, name, unit, active")
+      .select("id, name, brand, size, unit, standard_cost_cents, active")
       .eq("business_id", businessId)
       .order("name");
     return unwrap(res) as ProductOpt[];
@@ -86,7 +102,7 @@ export default function InventoryPage() {
   const stockQ = useQuery(async () => {
     const res = await createClient()
       .from("v_stock_on_hand")
-      .select("product_id, product_name, unit, low_stock_threshold, active, branch_id, on_hand, avg_cost_cents, value_cents, last_moved_on")
+      .select("product_id, product_name, sku, brand, size, unit, low_stock_threshold, active, branch_id, on_hand, avg_cost_cents, standard_cost_cents, value_cents, last_moved_on")
       .in("branch_id", shownIds)
       .order("product_name");
     return unwrap(res) as StockRow[];
@@ -164,6 +180,9 @@ export default function InventoryPage() {
 interface StockGroup {
   product_id: string;
   name: string;
+  sku: string | null;
+  brand: string | null;
+  size: string | null;
   unit: string;
   threshold: number;
   active: boolean;
@@ -174,7 +193,10 @@ interface StockGroup {
 }
 
 const STOCK_ACC: Record<string, (g: StockGroup) => unknown> = {
+  sku: (g) => g.sku,
   product: (g) => g.name,
+  brand: (g) => g.brand,
+  size: (g) => g.size,
   unit: (g) => g.unit,
   cost: (g) => g.avg_cost_cents,
   value: (g) => g.value_cents,
@@ -187,17 +209,25 @@ function StockCard({ q, shown, hasProducts }: {
   hasProducts: boolean;
 }) {
   const [statusFilter, setStatusFilter] = useState<"active" | "all">("active");
+  const [search, setSearch] = useState("");
 
   const groups = (() => {
     if (q.status !== "ready") return null;
+    const s = search.trim().toLowerCase();
     const byProduct = new Map<string, StockGroup>();
     for (const r of q.data) {
       if (statusFilter === "active" && !r.active) continue;
+      if (s !== "" &&
+          ![r.product_name, r.brand, r.sku].some((v) => v?.toLowerCase().includes(s))) {
+        continue;
+      }
       const g = byProduct.get(r.product_id) ?? {
-        product_id: r.product_id, name: r.product_name, unit: r.unit,
+        product_id: r.product_id, name: r.product_name,
+        sku: r.sku, brand: r.brand, size: r.size, unit: r.unit,
         threshold: r.low_stock_threshold, active: r.active,
         byBranch: new Map<string, number>(),
-        avg_cost_cents: r.avg_cost_cents, value_cents: 0, last: null,
+        avg_cost_cents: r.avg_cost_cents ?? r.standard_cost_cents,
+        value_cents: 0, last: null,
       };
       g.byBranch.set(r.branch_id, r.on_hand);
       g.value_cents += r.value_cents;
@@ -213,17 +243,22 @@ function StockCard({ q, shown, hasProducts }: {
 
   return (
     <Card title="Stock on hand">
-      <div className="mb-3 flex items-center justify-between gap-4">
-        <p className="text-[11px] text-text-muted">
-          Counted from the movement ledger below — never typed directly. A red
-          figure is at or under its low-stock alert level.
-        </p>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="w-56 shrink-0">
+          <Input placeholder="Search name, brand or SKU" value={search}
+            aria-label="Search stock"
+            onChange={(e) => setSearch(e.target.value)} />
+        </span>
         <Select value={statusFilter} className="w-36"
           aria-label="Product status filter"
           onChange={(e) => setStatusFilter(e.target.value as "active" | "all")}>
           <option value="active">Active products</option>
           <option value="all">All products</option>
         </Select>
+        <p className="ml-auto text-[11px] text-text-muted">
+          Counted from the movement ledger — never typed directly. Red = at or
+          under the low-stock alert.
+        </p>
       </div>
       {q.status === "loading" && <SkeletonRows rows={6} cols={5} />}
       {q.status === "error" && (
@@ -236,12 +271,15 @@ function StockCard({ q, shown, hasProducts }: {
         <Table>
           <thead>
             <tr>
+              <Th {...th("sku")}>SKU</Th>
               <Th {...th("product")}>Product</Th>
+              <Th {...th("brand")}>Brand</Th>
+              <Th {...th("size")}>Size</Th>
               <Th {...th("unit")}>Unit</Th>
               {shown.map((b) => (
                 <Th key={b.id} align="right">{shown.length > 1 ? b.name : "On hand"}</Th>
               ))}
-              <Th align="right" {...th("cost")}>Avg cost</Th>
+              <Th align="right" {...th("cost")}>Unit cost</Th>
               <Th align="right" {...th("value")}>Stock value</Th>
               <Th {...th("last")}>Last movement</Th>
             </tr>
@@ -249,12 +287,15 @@ function StockCard({ q, shown, hasProducts }: {
           <tbody>
             {rows.map((g) => (
               <tr key={g.product_id} className={g.active ? "" : "opacity-50"}>
+                <Td className="tnum">{g.sku ?? "—"}</Td>
                 <Td className="font-bold">
-                  <Truncate text={g.name} max={36} />
+                  <Truncate text={g.name} max={28} />
                   {!g.active && (
                     <span className="ml-2 text-[11px] text-text-muted">retired</span>
                   )}
                 </Td>
+                <Td><Truncate text={g.brand ?? "—"} max={16} /></Td>
+                <Td>{g.size ?? "—"}</Td>
                 <Td>{g.unit}</Td>
                 {shown.map((b) => {
                   const oh = g.byBranch.get(b.id) ?? 0;
@@ -325,7 +366,7 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
       for (let offset = 0; ; offset += PAGE) {
         let query = supabase
           .from("v_stock_activity")
-          .select("id, moved_on, kind, qty, signed_qty, unit_cost_cents, supplier, note, product_id, product_name, unit, branch_id, branch_name")
+          .select("id, moved_on, kind, qty, signed_qty, unit_cost_cents, supplier, note, product_id, product_name, sku, brand, size, unit, branch_id, branch_name")
           .in("branch_id", shownIds)
           .order("moved_on", { ascending: true })
           .order("created_at", { ascending: true })
@@ -338,11 +379,11 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
       }
       downloadCsv(
         `inventory-activity.csv`,
-        ["Date", "Product", "Unit", "Branch", "Movement", "Qty", "Unit cost",
-         "Supplier", "Note"],
+        ["Date", "SKU", "Product", "Brand", "Size", "Unit", "Branch",
+         "Movement", "Qty", "Unit cost", "Supplier", "Note"],
         all.map((r) => [
-          r.moved_on, r.product_name, r.unit, r.branch_name,
-          KIND_LABEL[r.kind] ?? r.kind, r.signed_qty,
+          r.moved_on, r.sku, r.product_name, r.brand, r.size, r.unit,
+          r.branch_name, KIND_LABEL[r.kind] ?? r.kind, r.signed_qty,
           r.unit_cost_cents != null ? csvPesos(r.unit_cost_cents) : "",
           r.supplier, r.note,
         ]),
@@ -411,7 +452,13 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
             {q.data.rows.map((r) => (
               <tr key={r.id}>
                 <Td className="tnum">{r.moved_on}</Td>
-                <Td><Truncate text={r.product_name} max={30} /></Td>
+                <Td>
+                  <Truncate
+                    text={[r.product_name, [r.brand, r.size].filter(Boolean).join(", ")]
+                      .filter(Boolean).join(" — ")}
+                    max={36}
+                  />
+                </Td>
                 {multiBranch && <Td>{r.branch_name}</Td>}
                 <Td>{KIND_LABEL[r.kind] ?? r.kind}</Td>
                 <Td align="right"
@@ -484,7 +531,7 @@ function ProductBranchFields({ f, products, branches }: {
         <Select value={f.productId} onChange={(e) => f.setProductId(e.target.value)}>
           <option value="">Pick a product…</option>
           {products.map((p) => (
-            <option key={p.id} value={p.id}>{p.name} ({p.unit})</option>
+            <option key={p.id} value={p.id}>{productLabel(p)} ({p.unit})</option>
           ))}
         </Select>
       </Field>
@@ -529,6 +576,17 @@ function DeliveryModal({ open, products, branches, onClose, onDone }: {
     setAsExpense(false);
     setPaidFrom("cash");
   }, [open]);
+
+  // The catalogue's standard cost pre-fills the field; a typed-over value
+  // is kept, and switching products replaces only an untouched pre-fill.
+  const prefillRef = useRef("");
+  useEffect(() => {
+    const p = products.find((x) => x.id === f.productId);
+    const std = p?.standard_cost_cents != null ? String(p.standard_cost_cents / 100) : "";
+    setCostInput((cur) => (cur === "" || cur === prefillRef.current ? std : cur));
+    prefillRef.current = std;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.productId]);
 
   const qty = Number(f.qtyInput);
   const unitCost = parsePesos(costInput);

@@ -611,15 +611,33 @@ function ToggleActive({ table, id, name, active, onChanged }: {
 
 interface ProductRow {
   id: string;
+  sku: string | null;
   name: string;
+  brand: string | null;
+  size: string | null;
   unit: string;
+  category_id: string | null;
+  subcategory_id: string | null;
+  standard_cost_cents: number | null;
+  retail_price_cents: number | null;
   low_stock_threshold: number;
   active: boolean;
 }
 
-const PRODUCT_ACC: Record<string, (p: ProductRow) => unknown> = {
+interface CategoryRow {
+  id: string;
+  parent_id: string | null;
+  name: string;
+}
+
+const PRODUCT_ACC: Record<string, (p: ProductRow & { catLabel: string }) => unknown> = {
+  sku: (p) => p.sku,
   name: (p) => p.name,
-  unit: (p) => p.unit,
+  brand: (p) => p.brand,
+  category: (p) => p.catLabel,
+  size: (p) => p.size,
+  cost: (p) => p.standard_cost_cents,
+  retail: (p) => p.retail_price_cents,
   threshold: (p) => p.low_stock_threshold,
   status: (p) => (p.active ? "Active" : "Retired"),
 };
@@ -627,58 +645,108 @@ const PRODUCT_ACC: Record<string, (p: ProductRow) => unknown> = {
 function ProductsTab() {
   const { businessId } = useSession();
   const [statusFilter, setStatusFilter] = useState<"" | "active" | "retired">("active");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ProductRow | null>(null);
   const [toggling, setToggling] = useState<ProductRow | null>(null);
 
   const q = useQuery(async () => {
-    const res = await createClient()
-      .from("products")
-      .select("id, name, unit, low_stock_threshold, active")
-      .eq("business_id", businessId)
-      .order("name");
-    return unwrap(res) as ProductRow[];
+    const supabase = createClient();
+    const [products, categories] = await Promise.all([
+      supabase
+        .from("products")
+        .select("id, sku, name, brand, size, unit, category_id, subcategory_id, standard_cost_cents, retail_price_cents, low_stock_threshold, active")
+        .eq("business_id", businessId)
+        .order("name"),
+      supabase
+        .from("product_categories")
+        .select("id, parent_id, name")
+        .eq("business_id", businessId)
+        .order("name"),
+    ]);
+    return {
+      products: unwrap(products) as ProductRow[],
+      categories: unwrap(categories) as CategoryRow[],
+    };
   }, [businessId]);
 
+  const categories = q.status === "ready" ? q.data.categories : [];
+  const catName = new Map(categories.map((c) => [c.id, c.name]));
+
   const filtered = q.status === "ready"
-    ? q.data.filter((p) =>
-        statusFilter === "" ? true : statusFilter === "active" ? p.active : !p.active)
+    ? q.data.products
+        .filter((p) =>
+          statusFilter === "" ? true : statusFilter === "active" ? p.active : !p.active)
+        .filter((p) => categoryFilter === "" || p.category_id === categoryFilter)
+        .filter((p) => {
+          const s = search.trim().toLowerCase();
+          if (s === "") return true;
+          return [p.name, p.brand, p.sku].some((v) => v?.toLowerCase().includes(s));
+        })
+        .map((p) => ({
+          ...p,
+          catLabel: [
+            p.category_id ? catName.get(p.category_id) : null,
+            p.subcategory_id ? catName.get(p.subcategory_id) : null,
+          ].filter(Boolean).join(" › "),
+        }))
     : null;
   const { rows, th } = useSort(filtered, PRODUCT_ACC);
 
   return (
     <Card title="Products">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-        <p className="text-[11px] text-text-muted">
-          The inventory catalogue. Stock levels and movements live on the
-          Inventory page; retiring a product hides it from new movements
-          without touching its history.
-        </p>
-        <div className="flex items-center gap-2">
-          <Select value={statusFilter} className="w-32" aria-label="Status filter"
-            onChange={(e) => setStatusFilter(e.target.value as "" | "active" | "retired")}>
-            <option value="active">Active</option>
-            <option value="retired">Retired</option>
-            <option value="">All</option>
-          </Select>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="w-56 shrink-0">
+          <Input placeholder="Search name, brand or SKU" value={search}
+            aria-label="Search products"
+            onChange={(e) => setSearch(e.target.value)} />
+        </span>
+        <Select value={categoryFilter} className="w-44" aria-label="Category filter"
+          onChange={(e) => setCategoryFilter(e.target.value)}>
+          <option value="">All categories</option>
+          {categories.filter((c) => c.parent_id == null).map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </Select>
+        <Select value={statusFilter} className="w-32" aria-label="Status filter"
+          onChange={(e) => setStatusFilter(e.target.value as "" | "active" | "retired")}>
+          <option value="active">Active</option>
+          <option value="retired">Retired</option>
+          <option value="">All</option>
+        </Select>
+        <span className="ml-auto">
           <Button variant="primary" onClick={() => setAdding(true)}>Add product</Button>
-        </div>
+        </span>
       </div>
+      <p className="mb-3 text-[11px] text-text-muted">
+        The inventory catalogue. Categories and sub-categories are created
+        right inside the product form. Stock levels live on the Inventory
+        page; retiring a product hides it from new movements without touching
+        its history.
+      </p>
 
-      {q.status === "loading" && <SkeletonRows rows={4} cols={4} />}
+      {q.status === "loading" && <SkeletonRows rows={4} cols={8} />}
       {q.status === "error" && <ErrorState message="Products did not load." onRetry={q.retry} />}
       {rows != null && rows.length === 0 && (
-        <EmptyState message={statusFilter === "retired"
-          ? "No retired products."
-          : "No products yet. Add the consumables you want tracked."} />
+        <EmptyState message={search.trim() !== "" || categoryFilter !== ""
+          ? "No products match these filters."
+          : statusFilter === "retired"
+            ? "No retired products."
+            : "No products yet. Add the consumables you want tracked."} />
       )}
       {rows != null && rows.length > 0 && (
         <Table>
           <thead>
             <tr>
+              <Th {...th("sku")}>SKU</Th>
               <Th {...th("name")}>Product</Th>
-              <Th {...th("unit")}>Unit</Th>
-              <Th align="right" {...th("threshold")}>Low-stock alert</Th>
+              <Th {...th("brand")}>Brand</Th>
+              <Th {...th("category")}>Category</Th>
+              <Th {...th("size")}>Size</Th>
+              <Th align="right" {...th("cost")}>Unit cost</Th>
+              <Th align="right" {...th("retail")}>Retail</Th>
+              <Th align="right" {...th("threshold")}>Alert</Th>
               <Th {...th("status")}>Status</Th>
               <Th align="right"></Th>
             </tr>
@@ -686,8 +754,17 @@ function ProductsTab() {
           <tbody>
             {rows.map((p) => (
               <tr key={p.id} className={p.active ? "" : "opacity-50"}>
-                <Td className="font-bold"><Truncate text={p.name} max={40} /></Td>
-                <Td>{p.unit}</Td>
+                <Td className="tnum">{p.sku ?? "—"}</Td>
+                <Td className="font-bold"><Truncate text={p.name} max={28} /></Td>
+                <Td><Truncate text={p.brand ?? "—"} max={16} /></Td>
+                <Td><Truncate text={p.catLabel || "—"} max={24} /></Td>
+                <Td>{p.size ?? "—"}</Td>
+                <Td align="right" className="tnum">
+                  {p.standard_cost_cents != null ? formatCentavos(p.standard_cost_cents) : "—"}
+                </Td>
+                <Td align="right" className="tnum">
+                  {p.retail_price_cents != null ? formatCentavos(p.retail_price_cents) : "—"}
+                </Td>
                 <Td align="right" className="tnum">
                   {p.low_stock_threshold > 0 ? `at ${p.low_stock_threshold}` : "—"}
                 </Td>
@@ -716,6 +793,7 @@ function ProductsTab() {
       <ProductModal
         open={adding || editing != null}
         product={editing}
+        categories={categories}
         businessId={businessId}
         onClose={() => { setAdding(false); setEditing(null); }}
         onDone={() => { setAdding(false); setEditing(null); q.retry(); }}
@@ -729,44 +807,130 @@ function ProductsTab() {
   );
 }
 
-function ProductModal({ open, product, businessId, onClose, onDone }: {
+/** Sentinel option value: the user is typing a brand-new category name. */
+const NEW_CATEGORY = "__new__";
+
+function ProductModal({ open, product, categories, businessId, onClose, onDone }: {
   open: boolean;
   product: ProductRow | null;
+  categories: CategoryRow[];
   businessId: string | null;
   onClose: () => void;
   onDone: () => void;
 }) {
+  const [sku, setSku] = useState("");
   const [name, setName] = useState("");
+  const [brand, setBrand] = useState("");
+  const [size, setSize] = useState("");
   const [unit, setUnit] = useState("pc");
+  const [categoryId, setCategoryId] = useState("");
+  const [newCategory, setNewCategory] = useState("");
+  const [subcategoryId, setSubcategoryId] = useState("");
+  const [newSubcategory, setNewSubcategory] = useState("");
+  const [costInput, setCostInput] = useState("");
+  const [retailInput, setRetailInput] = useState("");
   const [thresholdInput, setThresholdInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    setSku(product?.sku ?? "");
     setName(product?.name ?? "");
+    setBrand(product?.brand ?? "");
+    setSize(product?.size ?? "");
     setUnit(product?.unit ?? "pc");
+    setCategoryId(product?.category_id ?? "");
+    setNewCategory("");
+    setSubcategoryId(product?.subcategory_id ?? "");
+    setNewSubcategory("");
+    setCostInput(product?.standard_cost_cents != null
+      ? String(product.standard_cost_cents / 100) : "");
+    setRetailInput(product?.retail_price_cents != null
+      ? String(product.retail_price_cents / 100) : "");
     setThresholdInput(product && product.low_stock_threshold > 0
       ? String(product.low_stock_threshold) : "");
     setError(null);
     setBusy(false);
   }, [open, product]);
 
+  const topCategories = categories.filter((c) => c.parent_id == null);
+  const subcategories = categoryId !== "" && categoryId !== NEW_CATEGORY
+    ? categories.filter((c) => c.parent_id === categoryId)
+    : [];
+
   async function submit() {
     const trimmed = name.trim();
     const threshold = thresholdInput === "" ? 0 : Number(thresholdInput);
+    const cost = costInput.trim() === "" ? null : parsePesos(costInput);
+    const retail = retailInput.trim() === "" ? null : parsePesos(retailInput);
     if (trimmed === "") { setError("The product needs a name."); return; }
     if (unit.trim() === "") { setError("The unit is required — bottle, sachet, pc…"); return; }
+    if (costInput.trim() !== "" && (cost == null || cost < 0)) {
+      setError("Unit cost must be a peso amount, or blank."); return;
+    }
+    if (retailInput.trim() !== "" && (retail == null || retail < 0)) {
+      setError("Retail price must be a peso amount, or blank."); return;
+    }
     if (!Number.isInteger(threshold) || threshold < 0) {
-      setError("The low-stock alert must be a whole number, or blank for none.");
-      return;
+      setError("The low-stock alert must be a whole number, or blank for none."); return;
+    }
+    if (categoryId === NEW_CATEGORY && newCategory.trim() === "") {
+      setError("Type the new category's name."); return;
+    }
+    if (subcategoryId === NEW_CATEGORY && newSubcategory.trim() === "") {
+      setError("Type the new sub-category's name."); return;
     }
     setBusy(true);
     setError(null);
     const supabase = createClient();
+
+    // Inline category creation: brand-new names become rows first, so
+    // nobody ever needs a developer to grow the category list.
+    let catId: string | null = categoryId === "" ? null : categoryId;
+    if (categoryId === NEW_CATEGORY) {
+      const { data, error: err } = await supabase
+        .from("product_categories")
+        .insert({ business_id: businessId, name: newCategory.trim() })
+        .select("id")
+        .single();
+      if (err) {
+        setBusy(false);
+        setError(/duplicate|unique/i.test(err.message)
+          ? "A category with that name already exists."
+          : "The category was not saved. Try again.");
+        return;
+      }
+      catId = (data as { id: string }).id;
+    }
+    let subId: string | null =
+      subcategoryId === "" || catId == null ? null : subcategoryId;
+    if (subcategoryId === NEW_CATEGORY && catId != null) {
+      const { data, error: err } = await supabase
+        .from("product_categories")
+        .insert({ business_id: businessId, parent_id: catId, name: newSubcategory.trim() })
+        .select("id")
+        .single();
+      if (err) {
+        setBusy(false);
+        setError(/duplicate|unique/i.test(err.message)
+          ? "A sub-category with that name already exists here."
+          : "The sub-category was not saved. Try again.");
+        return;
+      }
+      subId = (data as { id: string }).id;
+    }
+
     const values = {
+      sku: sku.trim() || null,
       name: trimmed,
+      brand: brand.trim() || null,
+      size: size.trim() || null,
       unit: unit.trim(),
+      category_id: catId,
+      subcategory_id: subId,
+      standard_cost_cents: cost,
+      retail_price_cents: retail,
       low_stock_threshold: threshold,
     };
     const { error: err } = product
@@ -774,9 +938,11 @@ function ProductModal({ open, product, businessId, onClose, onDone }: {
       : await supabase.from("products").insert({ ...values, business_id: businessId });
     setBusy(false);
     if (err) {
-      setError(/duplicate|unique/i.test(err.message)
-        ? "A product with this name already exists."
-        : "The product was not saved. Try again.");
+      setError(/products_sku_key/i.test(err.message)
+        ? "That SKU is already used by another product."
+        : /duplicate|unique/i.test(err.message)
+          ? "A product with this name, brand and size already exists."
+          : "The product was not saved. Try again.");
       return;
     }
     onDone();
@@ -785,15 +951,77 @@ function ProductModal({ open, product, businessId, onClose, onDone }: {
   return (
     <Modal title={product ? `Edit ${product.name}` : "Add product"} open={open} onClose={onClose}>
       <div className="space-y-4">
-        <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        </Field>
         <div className="flex flex-wrap gap-4">
-          <Field label="Unit" hint="bottle, sachet, box, pc…">
-            <Input value={unit} className="w-32" onChange={(e) => setUnit(e.target.value)} />
+          <Field label="SKU" hint="Blank for none">
+            <Input value={sku} className="w-32" onChange={(e) => setSku(e.target.value)} />
+          </Field>
+          <Field label="Name">
+            <Input value={name} className="w-64" autoFocus
+              onChange={(e) => setName(e.target.value)} />
+          </Field>
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <Field label="Brand">
+            <Input value={brand} className="w-40" onChange={(e) => setBrand(e.target.value)} />
+          </Field>
+          <Field label="Size" hint="e.g. 1 L, 500 mL">
+            <Input value={size} className="w-28" onChange={(e) => setSize(e.target.value)} />
+          </Field>
+          <Field label="Unit" hint="bottle, sachet, pc…">
+            <Input value={unit} className="w-28" onChange={(e) => setUnit(e.target.value)} />
+          </Field>
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <Field label="Category">
+            <Select value={categoryId} className="w-44"
+              onChange={(e) => {
+                setCategoryId(e.target.value);
+                setSubcategoryId("");
+                setNewSubcategory("");
+              }}>
+              <option value="">No category</option>
+              {topCategories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+              <option value={NEW_CATEGORY}>+ Add new category…</option>
+            </Select>
+          </Field>
+          {categoryId === NEW_CATEGORY && (
+            <Field label="New category name">
+              <Input value={newCategory} className="w-44"
+                onChange={(e) => setNewCategory(e.target.value)} />
+            </Field>
+          )}
+          {categoryId !== "" && categoryId !== NEW_CATEGORY && (
+            <Field label="Sub-category">
+              <Select value={subcategoryId} className="w-44"
+                onChange={(e) => setSubcategoryId(e.target.value)}>
+                <option value="">No sub-category</option>
+                {subcategories.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+                <option value={NEW_CATEGORY}>+ Add new sub-category…</option>
+              </Select>
+            </Field>
+          )}
+          {subcategoryId === NEW_CATEGORY && (
+            <Field label="New sub-category name">
+              <Input value={newSubcategory} className="w-44"
+                onChange={(e) => setNewSubcategory(e.target.value)} />
+            </Field>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <Field label="Unit cost (₱)" hint="Pre-fills deliveries">
+            <Input inputMode="decimal" value={costInput} className="w-28"
+              onChange={(e) => setCostInput(e.target.value)} />
+          </Field>
+          <Field label="Retail price (₱)" hint="If sold to clients">
+            <Input inputMode="decimal" value={retailInput} className="w-28"
+              onChange={(e) => setRetailInput(e.target.value)} />
           </Field>
           <Field label="Low-stock alert" hint="Blank for none">
-            <Input inputMode="numeric" value={thresholdInput} className="w-32"
+            <Input inputMode="numeric" value={thresholdInput} className="w-28"
               onChange={(e) => setThresholdInput(e.target.value)} />
           </Field>
         </div>
