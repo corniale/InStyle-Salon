@@ -5,7 +5,7 @@
 // reflects it. Price changes insert a new effective_from row — history is
 // never rewritten (edge case 17).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Archive, ArchiveRestore, UserCheck, UserX } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
@@ -30,7 +30,7 @@ export default function SettingsPage() {
 
 function SettingsBody() {
   const { branches } = useSession();
-  const [tab, setTab] = useState<"services" | "technicians" | "targets" | "users" | "businesses">("services");
+  const [tab, setTab] = useState<"services" | "products" | "technicians" | "targets" | "users" | "businesses">("services");
 
   return (
     <div className="space-y-6">
@@ -39,6 +39,7 @@ function SettingsBody() {
       <div className="flex rounded-[4px] border border-border w-fit">
         {([
           ["services", "Services and prices"],
+          ["products", "Products"],
           ["technicians", "Technicians"],
           ["targets", "Targets"],
           ["users", "Staff accounts"],
@@ -57,6 +58,7 @@ function SettingsBody() {
       </div>
 
       {tab === "services" && <ServicesTab branches={branches} />}
+      {tab === "products" && <ProductsTab />}
       {tab === "technicians" && <TechniciansTab branches={branches} />}
       {tab === "targets" && <TargetsTab branches={branches} />}
       {tab === "users" && <UsersTab branches={branches} />}
@@ -600,6 +602,247 @@ function ToggleActive({ table, id, name, active, onChanged }: {
         </div>
       </Modal>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Products (inventory catalogue)
+// ---------------------------------------------------------------------------
+
+interface ProductRow {
+  id: string;
+  name: string;
+  unit: string;
+  low_stock_threshold: number;
+  active: boolean;
+}
+
+const PRODUCT_ACC: Record<string, (p: ProductRow) => unknown> = {
+  name: (p) => p.name,
+  unit: (p) => p.unit,
+  threshold: (p) => p.low_stock_threshold,
+  status: (p) => (p.active ? "Active" : "Retired"),
+};
+
+function ProductsTab() {
+  const { businessId } = useSession();
+  const [statusFilter, setStatusFilter] = useState<"" | "active" | "retired">("active");
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<ProductRow | null>(null);
+  const [toggling, setToggling] = useState<ProductRow | null>(null);
+
+  const q = useQuery(async () => {
+    const res = await createClient()
+      .from("products")
+      .select("id, name, unit, low_stock_threshold, active")
+      .eq("business_id", businessId)
+      .order("name");
+    return unwrap(res) as ProductRow[];
+  }, [businessId]);
+
+  const filtered = q.status === "ready"
+    ? q.data.filter((p) =>
+        statusFilter === "" ? true : statusFilter === "active" ? p.active : !p.active)
+    : null;
+  const { rows, th } = useSort(filtered, PRODUCT_ACC);
+
+  return (
+    <Card title="Products">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <p className="text-[11px] text-text-muted">
+          The inventory catalogue. Stock levels and movements live on the
+          Inventory page; retiring a product hides it from new movements
+          without touching its history.
+        </p>
+        <div className="flex items-center gap-2">
+          <Select value={statusFilter} className="w-32" aria-label="Status filter"
+            onChange={(e) => setStatusFilter(e.target.value as "" | "active" | "retired")}>
+            <option value="active">Active</option>
+            <option value="retired">Retired</option>
+            <option value="">All</option>
+          </Select>
+          <Button variant="primary" onClick={() => setAdding(true)}>Add product</Button>
+        </div>
+      </div>
+
+      {q.status === "loading" && <SkeletonRows rows={4} cols={4} />}
+      {q.status === "error" && <ErrorState message="Products did not load." onRetry={q.retry} />}
+      {rows != null && rows.length === 0 && (
+        <EmptyState message={statusFilter === "retired"
+          ? "No retired products."
+          : "No products yet. Add the consumables you want tracked."} />
+      )}
+      {rows != null && rows.length > 0 && (
+        <Table>
+          <thead>
+            <tr>
+              <Th {...th("name")}>Product</Th>
+              <Th {...th("unit")}>Unit</Th>
+              <Th align="right" {...th("threshold")}>Low-stock alert</Th>
+              <Th {...th("status")}>Status</Th>
+              <Th align="right"></Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p) => (
+              <tr key={p.id} className={p.active ? "" : "opacity-50"}>
+                <Td className="font-bold"><Truncate text={p.name} max={40} /></Td>
+                <Td>{p.unit}</Td>
+                <Td align="right" className="tnum">
+                  {p.low_stock_threshold > 0 ? `at ${p.low_stock_threshold}` : "—"}
+                </Td>
+                <Td>{p.active ? "Active" : <span className="text-text-muted">Retired</span>}</Td>
+                <Td align="right">
+                  <span className="flex items-center justify-end gap-3">
+                    <button className="text-[11px] hover:underline"
+                      onClick={() => setEditing(p)}>
+                      Edit
+                    </button>
+                    <button
+                      className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-text-body hover:underline"
+                      onClick={() => setToggling(p)}
+                    >
+                      {p.active ? <Archive size={14} /> : <ArchiveRestore size={14} />}
+                      {p.active ? "Retire" : "Restore"}
+                    </button>
+                  </span>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+
+      <ProductModal
+        open={adding || editing != null}
+        product={editing}
+        businessId={businessId}
+        onClose={() => { setAdding(false); setEditing(null); }}
+        onDone={() => { setAdding(false); setEditing(null); q.retry(); }}
+      />
+      <ProductToggleModal
+        product={toggling}
+        onClose={() => setToggling(null)}
+        onDone={() => { setToggling(null); q.retry(); }}
+      />
+    </Card>
+  );
+}
+
+function ProductModal({ open, product, businessId, onClose, onDone }: {
+  open: boolean;
+  product: ProductRow | null;
+  businessId: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [unit, setUnit] = useState("pc");
+  const [thresholdInput, setThresholdInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setName(product?.name ?? "");
+    setUnit(product?.unit ?? "pc");
+    setThresholdInput(product && product.low_stock_threshold > 0
+      ? String(product.low_stock_threshold) : "");
+    setError(null);
+    setBusy(false);
+  }, [open, product]);
+
+  async function submit() {
+    const trimmed = name.trim();
+    const threshold = thresholdInput === "" ? 0 : Number(thresholdInput);
+    if (trimmed === "") { setError("The product needs a name."); return; }
+    if (unit.trim() === "") { setError("The unit is required — bottle, sachet, pc…"); return; }
+    if (!Number.isInteger(threshold) || threshold < 0) {
+      setError("The low-stock alert must be a whole number, or blank for none.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const supabase = createClient();
+    const values = {
+      name: trimmed,
+      unit: unit.trim(),
+      low_stock_threshold: threshold,
+    };
+    const { error: err } = product
+      ? await supabase.from("products").update(values).eq("id", product.id)
+      : await supabase.from("products").insert({ ...values, business_id: businessId });
+    setBusy(false);
+    if (err) {
+      setError(/duplicate|unique/i.test(err.message)
+        ? "A product with this name already exists."
+        : "The product was not saved. Try again.");
+      return;
+    }
+    onDone();
+  }
+
+  return (
+    <Modal title={product ? `Edit ${product.name}` : "Add product"} open={open} onClose={onClose}>
+      <div className="space-y-4">
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </Field>
+        <div className="flex gap-4">
+          <Field label="Unit" hint="bottle, sachet, box, pc…">
+            <Input value={unit} className="w-32" onChange={(e) => setUnit(e.target.value)} />
+          </Field>
+          <Field label="Low-stock alert" hint="Blank for none">
+            <Input inputMode="numeric" value={thresholdInput} className="w-32"
+              onChange={(e) => setThresholdInput(e.target.value)} />
+          </Field>
+        </div>
+        {error && <p className="text-[11px] text-brand-red">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void submit()}>
+            {product ? "Save changes" : "Add product"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ProductToggleModal({ product, onClose, onDone }: {
+  product: ProductRow | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function apply() {
+    if (!product) return;
+    setBusy(true);
+    await createClient().from("products")
+      .update({ active: !product.active }).eq("id", product.id);
+    setBusy(false);
+    onDone();
+  }
+
+  return (
+    <Modal
+      title={product?.active ? `Retire ${product?.name}?` : `Restore ${product?.name}?`}
+      open={product != null}
+      onClose={onClose}
+    >
+      <p className="mb-4 text-[13px] text-text-muted">
+        {product?.active
+          ? "A retired product stops appearing in movement dialogs. Its stock history stays on record."
+          : "The product becomes available again for deliveries, usage and transfers."}
+      </p>
+      <div className="flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void apply()}>
+          {product?.active ? "Retire" : "Restore"}
+        </Button>
+      </div>
+    </Modal>
   );
 }
 

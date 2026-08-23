@@ -121,6 +121,14 @@ Small flagged items:
   wanted app-wide (one flag per table).
 
 Stage 2 proper:
-- Inquiry funnel and appointments/booking, timekeeping, banlaw and
-  cash-advance settlement modelling (also closes the last centavos of
-  drift vs the paper Daily Records).
+- Inquiry funnel and appointments/booking (front-desk first; public online
+  booking later) — spec awaiting the salon's questionnaire answers.
+- Timekeeping, banlaw and cash-advance settlement modelling (also closes
+  the last centavos of drift vs the paper Daily Records).
+
+Inventory (core shipped in 0028: catalogue, per-branch stock from an
+append-only movement ledger, weighted-average costing, transfers,
+low-stock alerts, per-product activity filter). Waiting on the salon's
+answers before building:
+- Automatic per-service consumption (deduct stock when a service is billed).
+- Retail product sales at the POS.

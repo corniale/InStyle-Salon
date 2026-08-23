@@ -9,7 +9,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Receipt, Users, Banknote, LineChart, UserRound,
-  Settings, Scale, LogOut,
+  Settings, Scale, LogOut, Package,
 } from "lucide-react";
 import { useSession } from "@/components/session-context";
 import { Wordmark } from "@/components/wordmark";
@@ -34,6 +34,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
     { href: "/tickets", label: "Tickets", icon: Receipt, show: true },
     { href: "/clients", label: "Clients", icon: Users, show: true },
     { href: "/cash", label: "Daily cash", icon: Banknote, show: true },
+    { href: "/inventory", label: "Inventory", icon: Package, show: true },
     { href: "/analytics", label: "Analytics", icon: LineChart, show: canSeeAnalytics },
     { href: "/technicians", label: "Technicians", icon: UserRound, show: canSeeAnalytics },
     { href: "/compare", label: "Branch comparison", icon: Scale, show: canSeeAnalytics },
