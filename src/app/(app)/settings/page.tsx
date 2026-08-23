@@ -30,7 +30,7 @@ export default function SettingsPage() {
 
 function SettingsBody() {
   const { branches } = useSession();
-  const [tab, setTab] = useState<"services" | "products" | "technicians" | "targets" | "users" | "businesses">("services");
+  const [tab, setTab] = useState<"services" | "products" | "costing" | "technicians" | "targets" | "users" | "businesses">("services");
 
   return (
     <div className="space-y-6">
@@ -40,6 +40,7 @@ function SettingsBody() {
         {([
           ["services", "Services and prices"],
           ["products", "Products"],
+          ["costing", "Costing"],
           ["technicians", "Technicians"],
           ["targets", "Targets"],
           ["users", "Staff accounts"],
@@ -59,6 +60,7 @@ function SettingsBody() {
 
       {tab === "services" && <ServicesTab branches={branches} />}
       {tab === "products" && <ProductsTab />}
+      {tab === "costing" && <CostingTab branches={branches} />}
       {tab === "technicians" && <TechniciansTab branches={branches} />}
       {tab === "targets" && <TargetsTab branches={branches} />}
       {tab === "users" && <UsersTab branches={branches} />}
@@ -1069,6 +1071,519 @@ function ProductToggleModal({ product, onClose, onDone }: {
         <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void apply()}>
           {product?.active ? "Retire" : "Restore"}
         </Button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Costing — true cost and margin per service (phase 1)
+// ---------------------------------------------------------------------------
+
+interface CostingRow {
+  service_id: string;
+  service_name: string;
+  service_type_name: string;
+  active: boolean;
+  price_cents: number | null;
+  sharing_rate: number;
+  product_cost_cents: number;
+  recipe_items: number;
+  unpriced_items: number;
+  duration_min: number;
+  duration_source: "timed" | "standard";
+  treatments_90d: number;
+  realized_price_cents: number | null;
+}
+
+interface CostingComputed extends CostingRow {
+  labor_cents: number | null;
+  overhead_cents: number;
+  cost_cents: number | null;
+  margin_cents: number | null;
+  margin_pct: number | null;
+  contribution_cents: number | null;
+}
+
+const COSTING_ACC: Record<string, (r: CostingComputed) => unknown> = {
+  service: (r) => r.service_name,
+  type: (r) => r.service_type_name,
+  price: (r) => r.price_cents,
+  labor: (r) => r.labor_cents,
+  products: (r) => r.product_cost_cents,
+  overhead: (r) => r.overhead_cents,
+  cost: (r) => r.cost_cents,
+  margin: (r) => r.margin_cents,
+  pct: (r) => r.margin_pct,
+  contrib: (r) => r.contribution_cents,
+};
+
+function CostingTab({ branches }: { branches: Branch[] }) {
+  const { branchId } = useSession();
+  const [branch, setBranch] = useState(branchId ?? branches[0]?.id ?? "");
+  const [nonce, setNonce] = useState(0);
+  const [recipeFor, setRecipeFor] = useState<CostingRow | null>(null);
+  // What-if prices, keyed by service id; peso text as typed.
+  const [whatIf, setWhatIf] = useState<Record<string, string>>({});
+  useEffect(() => { setWhatIf({}); }, [branch]);
+
+  const q = useQuery(async () => {
+    const supabase = createClient();
+    const [rows, basis, suggestion, settings] = await Promise.all([
+      supabase.rpc("f_service_costing", { p_branch: branch }),
+      supabase.rpc("f_costing_basis", { p_branch: branch }),
+      supabase.rpc("f_overhead_suggestion", { p_branch: branch }),
+      supabase.from("costing_settings").select("*").eq("branch_id", branch).maybeSingle(),
+    ]);
+    return {
+      rows: (unwrap(rows) as CostingRow[]).filter((r) => r.active),
+      monthlyMinutes: Number((unwrap(basis) as { monthly_minutes: number }[])[0]?.monthly_minutes ?? 0),
+      suggestions: unwrap(suggestion) as { category: string; monthly_avg_cents: number }[],
+      settings: settings.data as {
+        monthly_overhead_cents: number;
+        monthly_minutes_override: number | null;
+      } | null,
+    };
+  }, [branch, nonce]);
+
+  const pool = q.status === "ready" ? q.data.settings?.monthly_overhead_cents ?? 0 : 0;
+  const minutes = q.status === "ready"
+    ? q.data.settings?.monthly_minutes_override ?? q.data.monthlyMinutes
+    : 0;
+  const ohRate = minutes > 0 ? pool / minutes : 0; // centavos per minute
+
+  const computed: CostingComputed[] | null = q.status === "ready"
+    ? q.data.rows.map((r) => {
+        const priceInput = whatIf[r.service_id];
+        const price = priceInput != null && priceInput.trim() !== ""
+          ? parsePesos(priceInput)
+          : r.price_cents;
+        const overhead = Math.round(r.duration_min * ohRate);
+        if (price == null) {
+          return {
+            ...r, labor_cents: null, overhead_cents: overhead, cost_cents: null,
+            margin_cents: null, margin_pct: null, contribution_cents: null,
+          };
+        }
+        const labor = Math.round(price * Number(r.sharing_rate));
+        const cost = labor + r.product_cost_cents + overhead;
+        const margin = price - cost;
+        return {
+          ...r,
+          labor_cents: labor,
+          overhead_cents: overhead,
+          cost_cents: cost,
+          margin_cents: margin,
+          margin_pct: price > 0 ? (margin / price) * 100 : null,
+          contribution_cents: Math.round((margin * r.treatments_90d) / 3),
+        };
+      })
+    : null;
+
+  const { rows, th } = useSort(computed, COSTING_ACC);
+
+  return (
+    <div className="space-y-6">
+      <Card title="Costing assumptions">
+        <div className="mb-4 flex flex-wrap items-end gap-4">
+          {branches.length > 1 && (
+            <Field label="Branch">
+              <Select value={branch} className="w-40"
+                onChange={(e) => setBranch(e.target.value)}>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </Select>
+            </Field>
+          )}
+          {q.status === "ready" && (
+            <AssumptionsEditor
+              key={branch}
+              branch={branch}
+              settings={q.data.settings}
+              computedMinutes={q.data.monthlyMinutes}
+              onSaved={() => setNonce((n) => n + 1)}
+            />
+          )}
+        </div>
+        {q.status === "ready" && (
+          <p className="text-[11px] text-text-muted">
+            The overhead pool is the branch&apos;s fixed monthly running cost: rent,
+            fixed salaries, and anything else the app does not see. For reference,
+            the expense ledger averaged per month (last 3 full months):{" "}
+            {q.data.suggestions.length === 0
+              ? "no expenses recorded yet."
+              : q.data.suggestions.map((s) =>
+                  `${s.category} ${formatCentavos(s.monthly_avg_cents)}`).join(" · ") + "."}
+            {" "}Leave allowance/withdrawal categories out — technician pay is
+            already counted as labor, and withdrawals are not costs.
+          </p>
+        )}
+      </Card>
+
+      <Card title="True cost and margin per service">
+        {q.status === "loading" && <SkeletonRows rows={8} cols={9} />}
+        {q.status === "error" && (
+          <ErrorState message="Costing did not load." onRetry={q.retry} />
+        )}
+        {q.status === "ready" && pool === 0 && (
+          <p className="mb-3 text-[11px] text-brand-red">
+            The overhead pool is ₱0 — margins below ignore rent and fixed costs
+            until it is set above.
+          </p>
+        )}
+        {rows != null && rows.length === 0 && (
+          <EmptyState message="No active services for this branch's business." />
+        )}
+        {rows != null && rows.length > 0 && (
+          <>
+            <Table>
+              <thead>
+                <tr>
+                  <Th {...th("service")}>Service</Th>
+                  <Th align="right" {...th("price")}>Price</Th>
+                  <Th align="right" {...th("labor")}>Labor</Th>
+                  <Th align="right" {...th("products")}>Products</Th>
+                  <Th align="right" {...th("overhead")}>Overhead</Th>
+                  <Th align="right" {...th("cost")}>True cost</Th>
+                  <Th align="right" {...th("margin")}>Margin</Th>
+                  <Th align="right" {...th("pct")}>Margin %</Th>
+                  <Th align="right" {...th("contrib")}>Contrib./mo</Th>
+                  <Th align="right">What-if ₱</Th>
+                  <Th></Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const thin = r.margin_pct != null && r.margin_pct < 20;
+                  const negative = r.margin_cents != null && r.margin_cents < 0;
+                  return (
+                    <tr key={r.service_id}>
+                      <Td>
+                        <span className="font-bold"><Truncate text={r.service_name} max={26} /></span>
+                        <span className="block text-[11px] text-text-muted">
+                          {r.service_type_name} · {r.duration_min} min
+                          {r.duration_source === "timed" ? " (timed)" : ""}
+                        </span>
+                      </Td>
+                      <Td align="right" className="tnum">
+                        {r.price_cents != null ? formatCentavos(r.price_cents) : (
+                          <span className="text-text-muted">no price</span>
+                        )}
+                        {r.realized_price_cents != null &&
+                          r.price_cents != null &&
+                          r.realized_price_cents !== r.price_cents && (
+                          <span className="block text-[11px] text-text-muted">
+                            realized {formatCentavos(r.realized_price_cents)}
+                          </span>
+                        )}
+                      </Td>
+                      <Td align="right" className="tnum">
+                        {r.labor_cents != null ? formatCentavos(r.labor_cents) : "—"}
+                      </Td>
+                      <Td align="right" className="tnum">
+                        {r.recipe_items === 0 ? (
+                          <span className="text-text-muted" title="No recipe yet">—</span>
+                        ) : (
+                          <>
+                            {formatCentavos(r.product_cost_cents)}
+                            {r.unpriced_items > 0 && (
+                              <span
+                                className="ml-1 text-brand-red"
+                                title={`${r.unpriced_items} recipe item(s) have no cost yet`}
+                              >
+                                ⚠
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </Td>
+                      <Td align="right" className="tnum">{formatCentavos(r.overhead_cents)}</Td>
+                      <Td align="right" className="tnum">
+                        {r.cost_cents != null ? formatCentavos(r.cost_cents) : "—"}
+                      </Td>
+                      <Td align="right"
+                        className={`tnum font-bold${negative ? " text-brand-red" : ""}`}>
+                        {r.margin_cents != null ? formatCentavos(r.margin_cents) : "—"}
+                      </Td>
+                      <Td align="right"
+                        className={`tnum${negative ? " font-bold text-brand-red" : thin ? " text-brand-red" : ""}`}>
+                        {r.margin_pct != null ? `${r.margin_pct.toFixed(1)}%` : "—"}
+                      </Td>
+                      <Td align="right" className="tnum">
+                        {r.contribution_cents != null && r.treatments_90d > 0
+                          ? formatCentavos(r.contribution_cents)
+                          : "—"}
+                      </Td>
+                      <Td align="right">
+                        <span className="inline-block w-20">
+                          <Input inputMode="decimal" className="h-7 w-20 text-right tnum"
+                            value={whatIf[r.service_id] ?? ""}
+                            aria-label={`What-if price for ${r.service_name}`}
+                            onChange={(e) => setWhatIf((w) => ({
+                              ...w, [r.service_id]: e.target.value,
+                            }))} />
+                        </span>
+                      </Td>
+                      <Td align="right">
+                        <button className="text-[11px] hover:underline"
+                          onClick={() => setRecipeFor(r)}>
+                          Recipe{r.recipe_items > 0 ? ` (${r.recipe_items})` : ""}
+                        </button>
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+            <p className="mt-2 text-[11px] text-text-muted">
+              Labor = the technician share actually paid. Products = the
+              service&apos;s recipe at delivered average cost. Overhead ={" "}
+              {minutes > 0
+                ? `duration × ${formatCentavos(Math.round(ohRate))} per serviced minute (₱${Math.round(pool / 100).toLocaleString()} pool ÷ ${Math.round(minutes).toLocaleString()} minutes/month)`
+                : "not absorbed yet — no serviced minutes recorded"}.
+              Contribution = margin × last 90 days&apos; volume ÷ 3. A red margin
+              is negative; a red percentage is under 20%. Type a what-if price
+              to preview a re-price.
+            </p>
+          </>
+        )}
+      </Card>
+
+      <RecipeModal
+        row={recipeFor}
+        onClose={() => setRecipeFor(null)}
+        onDone={() => { setRecipeFor(null); setNonce((n) => n + 1); }}
+      />
+    </div>
+  );
+}
+
+function AssumptionsEditor({ branch, settings, computedMinutes, onSaved }: {
+  branch: string;
+  settings: { monthly_overhead_cents: number; monthly_minutes_override: number | null } | null;
+  computedMinutes: number;
+  onSaved: () => void;
+}) {
+  const [poolInput, setPoolInput] = useState(
+    settings != null && settings.monthly_overhead_cents > 0
+      ? String(settings.monthly_overhead_cents / 100) : "");
+  const [minutesInput, setMinutesInput] = useState(
+    settings?.monthly_minutes_override != null
+      ? String(settings.monthly_minutes_override) : "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    const pool = poolInput.trim() === "" ? 0 : parsePesos(poolInput);
+    const override = minutesInput.trim() === "" ? null : Number(minutesInput);
+    if (pool == null || pool < 0) {
+      setError("The overhead pool must be a peso amount.");
+      return;
+    }
+    if (override != null && (!Number.isInteger(override) || override <= 0)) {
+      setError("Minutes must be a whole number, or blank to use the measured figure.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error: err } = await createClient()
+      .from("costing_settings")
+      .upsert({
+        branch_id: branch,
+        monthly_overhead_cents: pool,
+        monthly_minutes_override: override,
+        updated_at: new Date().toISOString(),
+      });
+    setBusy(false);
+    if (err) {
+      setError("The assumptions were not saved. Try again.");
+      return;
+    }
+    onSaved();
+  }
+
+  return (
+    <>
+      <Field label="Monthly overhead pool (₱)" error={error ?? undefined}>
+        <Input inputMode="decimal" value={poolInput} className="w-36"
+          invalid={!!error}
+          onChange={(e) => setPoolInput(e.target.value)} />
+      </Field>
+      <Field label="Serviced minutes / month"
+        hint={`Measured: ${Math.round(computedMinutes).toLocaleString()} (90-day avg)`}>
+        <Input inputMode="numeric" value={minutesInput} className="w-36"
+          placeholder={String(Math.round(computedMinutes))}
+          onChange={(e) => setMinutesInput(e.target.value)} />
+      </Field>
+      <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void save()}>
+        Save assumptions
+      </Button>
+    </>
+  );
+}
+
+interface RecipeItem {
+  id: string;
+  qty: number;
+  product_id: string;
+  products: { name: string; brand: string | null; size: string | null; unit: string } | null;
+}
+
+function RecipeModal({ row, onClose, onDone }: {
+  row: CostingRow | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { businessId } = useSession();
+  const [items, setItems] = useState<RecipeItem[] | null>(null);
+  const [products, setProducts] = useState<{ id: string; label: string }[]>([]);
+  const [productId, setProductId] = useState("");
+  const [qtyInput, setQtyInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!row) return;
+    setItems(null);
+    setProductId("");
+    setQtyInput("");
+    setError(null);
+    setDirty(false);
+    let alive = true;
+    void (async () => {
+      const supabase = createClient();
+      const [recipe, prods] = await Promise.all([
+        supabase
+          .from("service_recipes")
+          .select("id, qty, product_id, products(name, brand, size, unit)")
+          .eq("service_id", row.service_id)
+          .order("created_at"),
+        supabase
+          .from("products")
+          .select("id, name, brand, size, unit")
+          .eq("business_id", businessId)
+          .eq("active", true)
+          .order("name"),
+      ]);
+      if (!alive) return;
+      setItems((recipe.data ?? []) as unknown as RecipeItem[]);
+      setProducts(((prods.data ?? []) as {
+        id: string; name: string; brand: string | null; size: string | null; unit: string;
+      }[]).map((p) => ({
+        id: p.id,
+        label: `${p.name}${p.brand ? ` — ${p.brand}` : ""}${p.size ? `, ${p.size}` : ""} (${p.unit})`,
+      })));
+    })();
+    return () => { alive = false; };
+  }, [row, businessId]);
+
+  async function addItem() {
+    if (!row) return;
+    const qty = Number(qtyInput);
+    if (!productId) { setError("Pick a product."); return; }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setError("Quantity per treatment must be above zero — fractions like 0.25 are fine.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error: err } = await createClient().from("service_recipes").insert({
+      service_id: row.service_id,
+      product_id: productId,
+      qty,
+    });
+    setBusy(false);
+    if (err) {
+      setError(/duplicate|unique/i.test(err.message)
+        ? "That product is already in the recipe — remove it first to change the quantity."
+        : "The item was not added. Try again.");
+      return;
+    }
+    setDirty(true);
+    setProductId("");
+    setQtyInput("");
+    const { data } = await createClient()
+      .from("service_recipes")
+      .select("id, qty, product_id, products(name, brand, size, unit)")
+      .eq("service_id", row.service_id)
+      .order("created_at");
+    setItems((data ?? []) as unknown as RecipeItem[]);
+  }
+
+  async function removeItem(id: string) {
+    await createClient().from("service_recipes").delete().eq("id", id);
+    setDirty(true);
+    setItems((it) => it?.filter((i) => i.id !== id) ?? null);
+  }
+
+  function close() {
+    if (dirty) onDone(); else onClose();
+  }
+
+  return (
+    <Modal title={`Recipe — ${row?.service_name ?? ""}`} open={row != null} onClose={close}>
+      <p className="mb-4 text-[13px] text-text-muted">
+        What one treatment consumes. Costed at the delivered average price
+        (falling back to the product&apos;s standard cost). Fractions are fine —
+        0.25 means a quarter of a unit per treatment.
+      </p>
+      {items == null && <SkeletonRows rows={2} cols={3} />}
+      {items != null && items.length > 0 && (
+        <Table>
+          <thead>
+            <tr><Th>Product</Th><Th align="right">Qty / treatment</Th><Th></Th></tr>
+          </thead>
+          <tbody>
+            {items.map((i) => (
+              <tr key={i.id}>
+                <Td>
+                  <Truncate
+                    text={i.products
+                      ? `${i.products.name}${i.products.brand ? ` — ${i.products.brand}` : ""}${i.products.size ? `, ${i.products.size}` : ""}`
+                      : "?"}
+                    max={36}
+                  />
+                </Td>
+                <Td align="right" className="tnum">
+                  {Number(i.qty)} {i.products?.unit ?? ""}
+                </Td>
+                <Td align="right">
+                  <button className="text-[11px] text-brand-red hover:underline"
+                    onClick={() => void removeItem(i.id)}>
+                    Remove
+                  </button>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+      {items != null && items.length === 0 && (
+        <p className="mb-2 text-[13px] text-text-muted">No recipe yet.</p>
+      )}
+      <div className="mt-4 flex flex-wrap items-end gap-2">
+        <Field label="Product">
+          <Select value={productId} className="w-64"
+            onChange={(e) => setProductId(e.target.value)}>
+            <option value="">Pick a product…</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Qty / treatment">
+          <Input inputMode="decimal" value={qtyInput} className="w-24"
+            onChange={(e) => setQtyInput(e.target.value)} />
+        </Field>
+        <Button busy={busy} busyLabel="Adding" onClick={() => void addItem()}>
+          Add item
+        </Button>
+      </div>
+      {error && <p className="mt-2 text-[11px] text-brand-red">{error}</p>}
+      <div className="mt-4 flex justify-end">
+        <Button variant="primary" onClick={close}>Done</Button>
       </div>
     </Modal>
   );
