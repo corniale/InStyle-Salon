@@ -107,9 +107,6 @@ These are working defaults, all reversible, flagged for client confirmation:
 ## Backlog
 
 Deferred features (client said "later"):
-- Tickets view: Today / This month / YTD / date-picker filters with
-  pagination and a date column.
-- Ticket search box (client name, phone, TS#).
 - Define the Admin role's exact accesses (0020 gives it an interim shape:
   manager powers across all branches, plus exports; owner-only ground —
   settings, catalogue, staff accounts, audit log — stays owner-only).
