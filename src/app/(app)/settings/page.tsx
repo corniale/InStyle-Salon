@@ -1208,7 +1208,10 @@ function CostingTab({ branches }: { branches: Branch[] }) {
         </div>
         {q.status === "ready" && (
           <p className="text-[11px] text-text-muted">
-            The overhead pool is the branch&apos;s fixed monthly running cost: rent,
+            Serviced minutes measured from actual treatments (90-day average):{" "}
+            {Math.round(q.data.monthlyMinutes).toLocaleString()} per month — leave the
+            field blank to use it.
+            {" "}The overhead pool is the branch&apos;s fixed monthly running cost: rent,
             fixed salaries, and anything else the app does not see. For reference,
             the expense ledger averaged per month (last 3 full months):{" "}
             {q.data.suggestions.length === 0
@@ -1410,8 +1413,10 @@ function AssumptionsEditor({ branch, settings, computedMinutes, onSaved }: {
           invalid={!!error}
           onChange={(e) => setPoolInput(e.target.value)} />
       </Field>
-      <Field label="Serviced minutes / month"
-        hint={`Measured: ${Math.round(computedMinutes).toLocaleString()} (90-day avg)`}>
+      {/* No hint here on purpose: an always-visible hint makes this field
+          taller than its row siblings and breaks the bottom alignment. The
+          measured figure shows as the placeholder and in the note below. */}
+      <Field label="Serviced minutes / month">
         <Input inputMode="numeric" value={minutesInput} className="w-36"
           placeholder={String(Math.round(computedMinutes))}
           onChange={(e) => setMinutesInput(e.target.value)} />
