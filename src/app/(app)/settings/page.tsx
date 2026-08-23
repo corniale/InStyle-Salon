@@ -952,7 +952,7 @@ function ProductModal({ open, product, categories, businessId, onClose, onDone }
     <Modal title={product ? `Edit ${product.name}` : "Add product"} open={open} onClose={onClose}>
       <div className="space-y-4">
         <div className="flex flex-wrap gap-4">
-          <Field label="SKU" hint="Blank for none">
+          <Field label="SKU" hint="Blank — assigned automatically">
             <Input value={sku} className="w-32" onChange={(e) => setSku(e.target.value)} />
           </Field>
           <Field label="Name">

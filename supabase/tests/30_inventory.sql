@@ -79,6 +79,35 @@ begin
   end;
 end $$;
 
+-- SKUs assign themselves when blank (0030), and typed ones win.
+do $$
+declare v_biz uuid; v_a text; v_b text;
+begin
+  select business_id into v_biz from public.branches where code = 'MAIN';
+  insert into public.products (business_id, name, brand)
+  values (v_biz, 'Cotton pads', 'Generic') returning sku into v_a;
+  insert into public.products (business_id, name, brand)
+  values (v_biz, 'Cuticle oil', 'Generic') returning sku into v_b;
+  if v_a !~ '^P-\d{5}$' or v_b !~ '^P-\d{5}$' then
+    raise exception 'auto SKU has wrong shape: % / %', v_a, v_b;
+  end if;
+  if v_a = v_b then
+    raise exception 'two products drew the same auto SKU';
+  end if;
+  -- Typed SKUs are kept verbatim.
+  insert into public.products (business_id, name, sku)
+  values (v_biz, 'Barcode item', 'EAN-4801234');
+  if (select sku from public.products
+      where business_id = v_biz and name = 'Barcode item') <> 'EAN-4801234' then
+    raise exception 'typed SKU was overwritten';
+  end if;
+  -- No product is ever left without a SKU.
+  if exists (select 1 from public.products
+             where business_id = v_biz and nullif(btrim(coalesce(sku, '')), '') is null) then
+    raise exception 'a product has no SKU after 0030';
+  end if;
+end $$;
+
 -- Front desk cannot touch the catalogue.
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000003', false);
 do $$
