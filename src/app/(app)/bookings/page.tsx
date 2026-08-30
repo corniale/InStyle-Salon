@@ -78,8 +78,11 @@ function fmtTime(t: string): string {
   return `${h12}:${t.slice(3, 5)} ${ampm}`;
 }
 
-const SLOTS = Array.from({ length: 20 }, (_, i) => {
-  const m = 8 * 60 + i * 30;
+// 15-minute grid: services like a 45-minute haircut land on clean
+// boundaries instead of rounding to the half hour.
+const SLOT_MIN = 15;
+const SLOTS = Array.from({ length: (18 - 8) * (60 / SLOT_MIN) }, (_, i) => {
+  const m = 8 * 60 + i * SLOT_MIN;
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 });
 
@@ -244,19 +247,32 @@ function BucketColumn({ title, cap, bookings, date, nowMins, techNames, onSlot, 
         {SLOTS.map((slot) => {
           const starting = bookings.filter((b) => {
             const m = mins(b.starts_at);
-            return m >= mins(slot) && m < mins(slot) + 30;
+            return m >= mins(slot) && m < mins(slot) + SLOT_MIN;
           });
           const free = freeAt(slot);
+          const onHour = slot.endsWith(":00");
           return (
-            <div key={slot} className="flex min-h-9 items-start gap-2 py-1">
-              <button
-                className="w-16 shrink-0 pt-1 text-left text-[11px] text-text-muted tnum hover:text-text-body"
-                title="New booking at this time"
-                onClick={() => onSlot(slot)}
+            // The whole empty stretch of a row is a tap target for a new
+            // booking at that time; booking cards swallow their own taps.
+            <div
+              key={slot}
+              className={`flex items-start gap-2 py-0.5 hover:bg-surface-page ${
+                starting.length > 0 ? "min-h-9" : "min-h-6 cursor-pointer"
+              }`}
+              onClick={() => onSlot(slot)}
+              title={`New booking at ${fmtTime(slot)}`}
+            >
+              <span
+                className={`w-16 shrink-0 pt-1 text-left text-[11px] tnum ${
+                  onHour ? "text-text-body" : "text-text-muted"
+                }`}
               >
                 {fmtTime(slot)}
-              </button>
-              <div className="min-w-0 flex-1 space-y-1">
+              </span>
+              <div
+                className="min-w-0 flex-1 space-y-1"
+                onClick={(e) => { if (starting.length > 0) e.stopPropagation(); }}
+              >
                 {starting.map((b) => (
                   <BookingCardRow
                     key={b.id} b={b} nowMins={nowMins} techNames={techNames}

@@ -5,7 +5,7 @@
 // week is the booking calendar's capacity source; editing an approved
 // week re-opens it to draft automatically (database trigger).
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
@@ -281,35 +281,55 @@ export default function SchedulePage() {
               </tr>
             </thead>
             <tbody>
-              {q.data.techs.map((t) => (
-                <tr key={t.id} className={t.skill_level === "trainee" ? "opacity-60" : ""}>
-                  <Td>
-                    <Truncate text={t.full_name} max={20} />
-                    <span className="block text-[11px] text-text-muted">
-                      {t.specialty ?? "—"}
-                      {t.skill_level === "trainee" ? " · trainee" : ""}
-                    </span>
-                  </Td>
-                  {weekDates.map((d) => {
-                    const on = marks.has(`${t.id}:${d}`);
-                    return (
-                      <Td key={d} align="center">
-                        <button
-                          aria-label={`${t.full_name} ${d}`}
-                          onClick={() => toggle(t.id, d)}
-                          className={`h-7 w-9 rounded-[4px] border text-[11px] font-bold ${
-                            on
-                              ? "border-ink bg-ink text-white"
-                              : "border-border text-text-muted hover:bg-surface-page"
-                          }`}
-                        >
-                          {on ? "IN" : "—"}
-                        </button>
+              {/* Sectioned by skill set, so per-type availability reads at
+                  a glance. "Others" collects unidentified specialties —
+                  fix those in Settings → Technicians. */}
+              {([
+                ["Hair", (s: string | null) => s === "Hair"],
+                ["Nail & Foot", (s: string | null) => s === "Nail & Foot"],
+                ["Others (unidentified)", (s: string | null) => s !== "Hair" && s !== "Nail & Foot"],
+              ] as const).map(([section, match]) => {
+                const group = q.data.techs.filter((t) => match(t.specialty));
+                if (group.length === 0) return null;
+                return (
+                  <Fragment key={section}>
+                    <tr>
+                      <Td colSpan={8}
+                        className="bg-surface-page text-[11px] font-bold uppercase tracking-wide text-text-muted">
+                        {section}
                       </Td>
-                    );
-                  })}
-                </tr>
-              ))}
+                    </tr>
+                    {group.map((t) => (
+                      <tr key={t.id} className={t.skill_level === "trainee" ? "opacity-60" : ""}>
+                        <Td>
+                          <Truncate text={t.full_name} max={20} />
+                          {t.skill_level === "trainee" && (
+                            <span className="block text-[11px] text-text-muted">trainee</span>
+                          )}
+                        </Td>
+                        {weekDates.map((d) => {
+                          const on = marks.has(`${t.id}:${d}`);
+                          return (
+                            <Td key={d} align="center">
+                              <button
+                                aria-label={`${t.full_name} ${d}`}
+                                onClick={() => toggle(t.id, d)}
+                                className={`h-7 w-9 rounded-[4px] border text-[11px] font-bold ${
+                                  on
+                                    ? "border-ink bg-ink text-white"
+                                    : "border-border text-text-muted hover:bg-surface-page"
+                                }`}
+                              >
+                                {on ? "IN" : "—"}
+                              </button>
+                            </Td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </Table>
         )}
