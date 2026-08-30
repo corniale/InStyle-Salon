@@ -161,6 +161,59 @@ funnel matches how they already think.
 - ~32 clients/day at BRANCH sets the scale: a day view must comfortably
   show ~30-40 bookings + capacity at a glance.
 
+## E. Rules *(answered 2026-08-30)*
+
+**Q13 — deposits:** YES, deposits are taken — but no clear policy on the
+amount yet.
+**Q14 — lateness:** slot held 15 minutes, then released.
+**Q15 — cancel/move:** the salon follows up 30–60 min before a same-day
+booking; a day before for week-ahead bookings. Moves/cancellations are
+expected within the same window.
+**Q16 — who may take/edit/cancel:** front desk / team leader (no manager
+gate).
+
+## F. Reminders *(answered 2026-08-30)*
+
+**Q17:** covered by Q15 — follow-ups via FB Messenger and phone,
+whichever channel the client is active on / used to book.
+
+## G. Cash float *(answered 2026-08-30)*
+
+**Q18:** ALL remaining cash from daily sales is remitted nightly
+(to the house beside NaiTay), INCLUDING the change fund of ₱1,000 per
+branch (MAIN and BRANCH). The ₱1,000 returns as the next day's change
+fund. Practice may eventually change.
+
+### Design implications
+- **Opening balance = fixed ₱1,000 per branch**, configurable per branch
+  (they said practice will change). Build: per-branch standard change
+  fund; the day's cash record is auto-created with it when the first
+  ticket/expense of the day lands, still editable until close.
+- **Deposits (Q13):** recorded per booking (amount, method, reference) —
+  no enforced amount until the salon sets a policy. At billing, the
+  deposit prefills a payment leg on the ticket. Cash deposits taken on
+  an earlier day than the visit are a drawer-day nuance — flagged in the
+  spec as a decision (most remote deposits will be GCash, no drawer
+  impact).
+- **Late/no-show:** bookings get a visible "late" state 15 min after
+  start; front desk releases or re-slots with one tap. No-show is a
+  recorded outcome (funnel data).
+- **Confirm/remind worklist (Q15/Q17):** a "to follow up" card — today's
+  bookings 60 min ahead, plus tomorrow's for week-ahead bookings — with
+  the client's phone and outcome buttons (confirmed / moved / cancelled /
+  no answer). Channel stays FB/phone, done by a human; the app supplies
+  the list and records the result.
+- **Permissions (Q16):** booking create/edit/cancel = front desk and up,
+  own branch. Matches existing RLS patterns.
+
+## Upsell attribution *(answered 2026-08-30, confirmed with Ma'am Emily)*
+
+An upsell is credited to the technician who PERFORMS the upsold service
+(nakahawak ng service) — not to whoever talked the client into it.
+**This is exactly how the app already works**: the upsell tick lives on
+the service line, and the line's technician carries it in the ranking's
+upsell stats. No change needed.
+
 ## Still awaited
 - B: technician roster details (names, types, levels, schedules)
 - C: service durations; mid-service waits; two-staff services

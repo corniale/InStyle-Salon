@@ -1803,9 +1803,11 @@ function AddTechnicianModal({ open, branches, initialBranchId, onClose, onDone }
 
 function TargetsTab({ branches }: { branches: Branch[] }) {
   return (
-    <Card title="Monthly targets">
+    <Card title="Monthly targets and change fund">
       <p className="mb-4 text-[11px] text-text-muted">
-        The dashboard paces month-to-date sales against these. Pace, not forecast.
+        The dashboard paces month-to-date sales against the target. The change
+        fund is the standing opening balance — each day&apos;s cash record starts
+        with it automatically (still editable on Daily cash until close).
       </p>
       <div className="space-y-4">
         {branches.map((b) => (
@@ -1818,21 +1820,31 @@ function TargetsTab({ branches }: { branches: Branch[] }) {
 
 function TargetRow({ branch }: { branch: Branch }) {
   const [input, setInput] = useState(String(branch.monthly_target_cents / 100));
+  const [floatInput, setFloatInput] = useState(
+    String((branch.opening_float_default_cents ?? 0) / 100));
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
     const cents = parsePesos(input);
+    const floatCents = parsePesos(floatInput);
     if (cents == null || cents < 0) {
       setError("Enter the target in pesos.");
+      return;
+    }
+    if (floatCents == null || floatCents < 0) {
+      setError("Enter the change fund in pesos (0 for none).");
       return;
     }
     setBusy(true);
     setError(null);
     const { error } = await createClient()
       .from("branches")
-      .update({ monthly_target_cents: cents })
+      .update({
+        monthly_target_cents: cents,
+        opening_float_default_cents: floatCents,
+      })
       .eq("id", branch.id);
     setBusy(false);
     if (error) {
@@ -1844,10 +1856,14 @@ function TargetRow({ branch }: { branch: Branch }) {
   }
 
   return (
-    <div className="flex items-end gap-4">
+    <div className="flex flex-wrap items-end gap-4">
       <Field label={`${branch.name} monthly target (₱)`} error={error ?? undefined}>
-        <Input inputMode="decimal" value={input} className="w-48" invalid={!!error}
+        <Input inputMode="decimal" value={input} className="w-40" invalid={!!error}
           onChange={(e) => setInput(e.target.value)} />
+      </Field>
+      <Field label="Change fund (₱)">
+        <Input inputMode="decimal" value={floatInput} className="w-28"
+          onChange={(e) => setFloatInput(e.target.value)} />
       </Field>
       <Button variant="primary" busy={busy} busyLabel="Saving" onClick={() => void save()}>
         Save

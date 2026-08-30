@@ -31,6 +31,7 @@ export interface Branch {
   code: string;
   accent: "slate" | "plum";
   monthly_target_cents: number;
+  opening_float_default_cents: number;
   active: boolean;
 }
 

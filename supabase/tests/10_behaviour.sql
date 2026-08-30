@@ -695,5 +695,42 @@ begin
   end if;
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- 0033: the standing change fund seeds the day's cash record automatically
+-- ---------------------------------------------------------------------------
+
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', false);
+
+do $$
+declare v_branch uuid; v_res jsonb; v_expected bigint;
+begin
+  select id into v_branch from public.branches where code = 'BRANCH';
+  update public.branches set opening_float_default_cents = 50000
+  where id = v_branch;
+
+  -- No cash-day row exists for BRANCH today yet; the first ticket creates
+  -- it with the standing float.
+  v_res := create_ticket(jsonb_build_object(
+    'idempotency_key', 'test-float-1',
+    'branch_id', v_branch,
+    'client', jsonb_build_object('phone_declined', true),
+    'lines', jsonb_build_array(jsonb_build_object(
+      'service_id', (select id from public.services where name = 'Manicure'),
+      'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+      'qty', 1, 'unit_price_cents', 20000, 'sharing_rate', 0.500))));
+
+  if (select opening_float_cents from public.cash_days
+      where branch_id = v_branch and business_date = business_date()) <> 50000 then
+    raise exception 'standing float did not seed the cash day';
+  end if;
+
+  -- 50000 float + 20000 cash − 10000 technician share = 60000 expected.
+  v_expected := expected_cash(v_branch, business_date());
+  if v_expected <> 60000 then
+    raise exception 'expected cash with standing float wrong: %', v_expected;
+  end if;
+end $$;
+
 reset role;
 select 'behaviour suite passed' as result;
