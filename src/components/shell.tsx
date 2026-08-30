@@ -7,9 +7,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Receipt, Users, Banknote, LineChart, UserRound,
-  Settings, Scale, LogOut, Package,
+  Settings, Scale, LogOut, Package, Menu, PanelLeftClose, PanelLeft, X,
 } from "lucide-react";
 import { useSession } from "@/components/session-context";
 import { Wordmark } from "@/components/wordmark";
@@ -46,52 +47,134 @@ export function Shell({ children }: { children: React.ReactNode }) {
     window.location.href = "/login";
   }
 
+  // Sidebar state: on desktop it collapses to an icon rail (remembered per
+  // device); on phones it is a drawer that opens from the hamburger and
+  // closes on navigation.
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem("nav-collapsed") === "1");
+    } catch { /* private mode etc. — default expanded */ }
+  }, []);
+  function toggleCollapsed() {
+    setCollapsed((c) => {
+      try { localStorage.setItem("nav-collapsed", c ? "0" : "1"); } catch { /* ignore */ }
+      return !c;
+    });
+  }
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
+  const sidebarContent = (railOnly: boolean) => (
+    <>
+      <div className={`flex items-center py-4 ${railOnly ? "justify-center px-2" : "px-4"}`}>
+        {railOnly ? (
+          <span className="text-[15px] font-bold" aria-hidden>
+            i<span className="text-brand-red">S</span>
+          </span>
+        ) : (
+          <Wordmark business={business} />
+        )}
+      </div>
+
+      <nav className="flex-1 space-y-1 px-2">
+        {nav.map(({ href, label, icon: Icon }) => {
+          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              title={label}
+              className={`flex h-8 items-center gap-2 rounded-[4px] px-2 text-[13px] ${
+                railOnly ? "justify-center" : ""
+              } ${
+                active
+                  ? "bg-ink font-bold text-white"
+                  : "text-text-body hover:bg-surface-page"
+              }`}
+            >
+              <Icon size={16} aria-hidden className="shrink-0" />
+              {!railOnly && label}
+            </Link>
+          );
+        })}
+      </nav>
+
+      <div className={`border-t border-border ${railOnly ? "p-2 text-center" : "p-4"}`}>
+        {!railOnly && (
+          <>
+            <div className="text-[13px]">{profile.full_name}</div>
+            <div className="text-[11px] text-text-muted">
+              {profile.role === "owner" ? "Owner"
+                : profile.role === "admin" ? "Admin"
+                : profile.role === "manager" ? "Branch manager"
+                : "Front desk"}
+            </div>
+          </>
+        )}
+        <button
+          onClick={signOut}
+          title="Sign out"
+          className={`mt-2 flex items-center gap-1 text-[11px] text-text-muted hover:text-text-body ${
+            railOnly ? "mx-auto" : ""
+          }`}
+        >
+          <LogOut size={16} aria-hidden /> {!railOnly && "Sign out"}
+        </button>
+      </div>
+    </>
+  );
+
   return (
     <div className="flex min-h-screen">
-      <aside className="flex w-52 shrink-0 flex-col border-r border-border bg-surface-card">
-        <div className="flex items-center px-4 py-4">
-          <Wordmark business={business} />
-        </div>
-
-        <nav className="flex-1 space-y-1 px-2">
-          {nav.map(({ href, label, icon: Icon }) => {
-            const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={`flex h-8 items-center gap-2 rounded-[4px] px-2 text-[13px] ${
-                  active
-                    ? "bg-ink font-bold text-white"
-                    : "text-text-body hover:bg-surface-page"
-                }`}
-              >
-                <Icon size={16} aria-hidden />
-                {label}
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="border-t border-border p-4">
-          <div className="text-[13px]">{profile.full_name}</div>
-          <div className="text-[11px] text-text-muted">
-            {profile.role === "owner" ? "Owner"
-              : profile.role === "manager" ? "Branch manager"
-              : "Front desk"}
-          </div>
-          <button
-            onClick={signOut}
-            className="mt-2 flex items-center gap-1 text-[11px] text-text-muted hover:text-text-body"
-          >
-            <LogOut size={16} aria-hidden /> Sign out
-          </button>
-        </div>
+      {/* Desktop / tablet sidebar: full or icon rail. */}
+      <aside
+        className={`hidden shrink-0 flex-col border-r border-border bg-surface-card md:flex ${
+          collapsed ? "w-14" : "w-52"
+        }`}
+      >
+        {sidebarContent(collapsed)}
       </aside>
 
+      {/* Phone drawer. */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <button
+            aria-label="Close menu"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setMobileOpen(false)}
+          />
+          <aside className="absolute inset-y-0 left-0 flex w-60 flex-col border-r border-border bg-surface-card shadow-lg">
+            <button
+              aria-label="Close menu"
+              className="absolute right-2 top-4 p-1 text-text-muted hover:text-text-body"
+              onClick={() => setMobileOpen(false)}
+            >
+              <X size={18} aria-hidden />
+            </button>
+            {sidebarContent(false)}
+          </aside>
+        </div>
+      )}
+
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 items-center justify-between gap-4 border-b border-border bg-surface-card px-6">
+        <header className="flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-border bg-surface-card px-3 py-1 md:px-6">
           <div className="flex items-center gap-2">
+            <button
+              aria-label="Open menu"
+              className="p-1 text-text-muted hover:text-text-body md:hidden"
+              onClick={() => setMobileOpen(true)}
+            >
+              <Menu size={18} aria-hidden />
+            </button>
+            <button
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="hidden p-1 text-text-muted hover:text-text-body md:block"
+              onClick={toggleCollapsed}
+            >
+              {collapsed ? <PanelLeft size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
+            </button>
             {/* Branch identity marker (accent use 2 of 3). */}
             {branch ? (
               <span
@@ -154,7 +237,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 p-6">{children}</main>
+        <main className="min-w-0 flex-1 p-3 md:p-6">{children}</main>
       </div>
     </div>
   );
