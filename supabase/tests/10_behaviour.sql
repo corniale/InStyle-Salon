@@ -732,5 +732,68 @@ begin
   end if;
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- 0034: discounts come out of the company share, never the commission
+-- ---------------------------------------------------------------------------
+
+do $$
+declare v_branch uuid; v_res jsonb; v_ticket uuid;
+        v_tech bigint; v_company bigint; v_total bigint;
+begin
+  select id into v_branch from public.branches where code = 'BRANCH';
+
+  -- ₱500 service, 50% company rate, ₱100 senior discount:
+  -- commission stays ₱250 (on gross); company absorbs the ₱100.
+  v_res := create_ticket(jsonb_build_object(
+    'idempotency_key', 'test-share-1',
+    'branch_id', v_branch,
+    'client', jsonb_build_object('phone_declined', true),
+    'lines', jsonb_build_array(jsonb_build_object(
+      'service_id', (select id from public.services where name = 'Manicure'),
+      'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+      'qty', 1, 'unit_price_cents', 50000, 'discount_type', 'senior',
+      'discount_cents', 10000, 'sharing_rate', 0.500)),
+    'payments', jsonb_build_array(
+      jsonb_build_object('method', 'cash', 'amount_cents', 40000))));
+  v_ticket := (v_res ->> 'ticket_id')::uuid;
+
+  select technician_share_cents, company_share_cents, total_cents
+    into v_tech, v_company, v_total
+  from public.ticket_lines where ticket_id = v_ticket;
+  if v_total <> 40000 then raise exception 'total wrong: %', v_total; end if;
+  if v_tech <> 25000 then
+    raise exception 'discount reduced the commission: %', v_tech;
+  end if;
+  if v_company <> 15000 then
+    raise exception 'company share did not absorb the discount: %', v_company;
+  end if;
+
+  -- Fully-discounted (comp) line: the technician still earns the full
+  -- commission on gross; the company share goes negative.
+  v_res := create_ticket(jsonb_build_object(
+    'idempotency_key', 'test-share-2',
+    'branch_id', v_branch,
+    'client', jsonb_build_object('phone_declined', true),
+    'lines', jsonb_build_array(jsonb_build_object(
+      'service_id', (select id from public.services where name = 'Manicure'),
+      'technician_id', (select id from public.technicians where full_name = 'Ana Ramos'),
+      'qty', 1, 'unit_price_cents', 35000, 'discount_type', 'promo',
+      'discount_cents', 35000, 'sharing_rate', 0.550)),
+    'payments', jsonb_build_array(
+      jsonb_build_object('method', 'comp', 'amount_cents', 0))));
+  v_ticket := (v_res ->> 'ticket_id')::uuid;
+
+  select technician_share_cents, company_share_cents, total_cents
+    into v_tech, v_company, v_total
+  from public.ticket_lines where ticket_id = v_ticket;
+  if v_total <> 0 then raise exception 'comp total wrong: %', v_total; end if;
+  if v_tech <> 15750 then
+    raise exception 'comp line commission wrong: %', v_tech;
+  end if;
+  if v_company <> -15750 then
+    raise exception 'comp line company share wrong: %', v_company;
+  end if;
+end $$;
+
 reset role;
 select 'behaviour suite passed' as result;

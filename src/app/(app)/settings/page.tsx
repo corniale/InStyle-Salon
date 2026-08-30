@@ -1169,7 +1169,10 @@ function CostingTab({ branches }: { branches: Branch[] }) {
             margin_cents: null, margin_pct: null, contribution_cents: null,
           };
         }
-        const labor = Math.round(price * Number(r.sharing_rate));
+        // sharing_rate is the COMPANY's fraction; labor is the remainder —
+        // the technician's commission, computed on the undiscounted price
+        // (policy 0034: discounts never reduce the commission).
+        const labor = price - Math.round(price * Number(r.sharing_rate));
         const cost = labor + r.product_cost_cents + overhead;
         const margin = price - cost;
         return {
