@@ -31,19 +31,49 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const pending = usePendingSyncCount();
 
-  const nav = [
-    { href: "/", label: "Dashboard", icon: LayoutDashboard, show: canSeeAnalytics },
-    { href: "/tickets", label: "Tickets", icon: Receipt, show: true },
-    { href: "/bookings", label: "Bookings", icon: CalendarDays, show: true },
-    { href: "/schedule", label: "Schedule", icon: CalendarClock, show: true },
-    { href: "/clients", label: "Clients", icon: Users, show: true },
-    { href: "/cash", label: "Daily cash", icon: Banknote, show: true },
-    { href: "/inventory", label: "Inventory", icon: Package, show: true },
-    { href: "/analytics", label: "Analytics", icon: LineChart, show: canSeeAnalytics },
-    { href: "/technicians", label: "Technicians", icon: UserRound, show: canSeeAnalytics },
-    { href: "/compare", label: "Branch comparison", icon: Scale, show: canSeeAnalytics },
-    { href: "/settings", label: "Settings", icon: Settings, show: isOwner },
-  ].filter((n) => n.show);
+  // Grouped by how the work flows: the day's operations, the records the
+  // salon keeps, and the owner's reading room. Group labels hide in the
+  // collapsed rail (a divider separates groups instead).
+  const navGroups = [
+    {
+      label: null as string | null,
+      items: [
+        { href: "/", label: "Dashboard", icon: LayoutDashboard, show: canSeeAnalytics },
+      ],
+    },
+    {
+      label: "Operations",
+      items: [
+        { href: "/bookings", label: "Bookings", icon: CalendarDays, show: true },
+        { href: "/tickets", label: "Tickets", icon: Receipt, show: true },
+        { href: "/cash", label: "Daily cash", icon: Banknote, show: true },
+        { href: "/schedule", label: "Schedule", icon: CalendarClock, show: true },
+      ],
+    },
+    {
+      label: "Records",
+      items: [
+        { href: "/clients", label: "Clients", icon: Users, show: true },
+        { href: "/inventory", label: "Inventory", icon: Package, show: true },
+      ],
+    },
+    {
+      label: "Insights",
+      items: [
+        { href: "/analytics", label: "Analytics", icon: LineChart, show: canSeeAnalytics },
+        { href: "/technicians", label: "Technicians", icon: UserRound, show: canSeeAnalytics },
+        { href: "/compare", label: "Branch comparison", icon: Scale, show: canSeeAnalytics },
+      ],
+    },
+    {
+      label: "Setup",
+      items: [
+        { href: "/settings", label: "Settings", icon: Settings, show: isOwner },
+      ],
+    },
+  ]
+    .map((g) => ({ ...g, items: g.items.filter((n) => n.show) }))
+    .filter((g) => g.items.length > 0);
 
   async function signOut() {
     await createClient().auth.signOut();
@@ -80,27 +110,42 @@ export function Shell({ children }: { children: React.ReactNode }) {
         )}
       </div>
 
-      <nav className="flex-1 space-y-1 px-2">
-        {nav.map(({ href, label, icon: Icon }) => {
-          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              title={label}
-              className={`flex h-8 items-center gap-2 rounded-[4px] px-2 text-[13px] ${
-                railOnly ? "justify-center" : ""
-              } ${
-                active
-                  ? "bg-ink font-bold text-white"
-                  : "text-text-body hover:bg-surface-page"
-              }`}
-            >
-              <Icon size={16} aria-hidden className="shrink-0" />
-              {!railOnly && label}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 overflow-y-auto px-2">
+        {navGroups.map((group, gi) => (
+          <div key={group.label ?? "top"} className={gi > 0 ? "mt-3" : ""}>
+            {group.label != null && (
+              railOnly ? (
+                <div className="mx-1 mb-2 border-t border-border" aria-hidden />
+              ) : (
+                <div className="mb-1 px-2 text-[10px] font-bold uppercase tracking-wide text-text-muted">
+                  {group.label}
+                </div>
+              )
+            )}
+            <div className="space-y-1">
+              {group.items.map(({ href, label, icon: Icon }) => {
+                const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    title={label}
+                    className={`flex h-8 items-center gap-2 rounded-[4px] px-2 text-[13px] ${
+                      railOnly ? "justify-center" : ""
+                    } ${
+                      active
+                        ? "bg-ink font-bold text-white"
+                        : "text-text-body hover:bg-surface-page"
+                    }`}
+                  >
+                    <Icon size={16} aria-hidden className="shrink-0" />
+                    {!railOnly && label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       <div className={`border-t border-border ${railOnly ? "p-2 text-center" : "p-4"}`}>
