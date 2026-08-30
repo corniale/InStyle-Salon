@@ -199,5 +199,66 @@ begin
   end if;
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- Part 2: inquiries and the funnel (0036)
+-- ---------------------------------------------------------------------------
+
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000003', false);
+do $$
+declare v_main uuid; v_inq uuid; v_client uuid; v_svc uuid; v_res jsonb; f record;
+begin
+  select id into v_main from public.branches where code = 'MAIN';
+  select id into v_client from public.clients where phone = '09171112222';
+  select id into v_svc from public.services where name = 'Manicure';
+
+  -- Front desk logs an FB inquiry…
+  insert into public.inquiries (branch_id, channel, client_name, phone, interest, created_by)
+  values (v_main, 'fb', 'Emma C', '09170001111', 'Rebond price', auth.uid())
+  returning id into v_inq;
+
+  -- …and one from a call that never converts.
+  insert into public.inquiries (branch_id, channel, client_name, interest, created_by)
+  values (v_main, 'call', 'Anon', 'Foot spa', auth.uid());
+  update public.inquiries set status = 'closed', closed_reason = 'price shopper'
+  where branch_id = v_main and channel = 'call' and client_name = 'Anon';
+  if (select resolved_at from public.inquiries
+      where branch_id = v_main and channel = 'call' and client_name = 'Anon') is null then
+    raise exception 'closing an inquiry did not stamp resolved_at';
+  end if;
+
+  -- Converting: a booking is made and linked; the funnel counts it.
+  v_res := save_booking(jsonb_build_object(
+    'branch_id', v_main, 'client', jsonb_build_object('id', v_client),
+    'booking_date', business_date() + 1, 'starts_at', '16:00',
+    'services', jsonb_build_array(jsonb_build_object('service_id', v_svc, 'duration_min', 15))));
+  update public.inquiries
+     set status = 'booked', booking_id = (v_res ->> 'booking_id')::uuid
+   where id = v_inq;
+
+  select * into f from f_booking_funnel(v_main) where channel = 'fb';
+  if f.inquiries <> 1 or f.booked <> 1 or f.showed <> 0 then
+    raise exception 'funnel wrong: % / % / %', f.inquiries, f.booked, f.showed;
+  end if;
+
+  -- Follow-up outcome fields are writable by branch staff.
+  update public.bookings
+     set followed_up_at = now(), follow_up_result = 'confirmed',
+         status = 'confirmed'
+   where id = (v_res ->> 'booking_id')::uuid;
+
+  -- Billing the linked booking moves it to "showed".
+  perform set_booking_status((v_res ->> 'booking_id')::uuid, 'billed');
+  select * into f from f_booking_funnel(v_main) where channel = 'fb';
+  if f.showed <> 1 then
+    raise exception 'funnel showed wrong: %', f.showed;
+  end if;
+
+  -- Outcomes roll up, including the deposit split.
+  select * into f from f_booking_outcomes(v_main);
+  if f.total < 1 or f.billed < 1 then
+    raise exception 'outcomes wrong: total % billed %', f.total, f.billed;
+  end if;
+end $$;
+
 reset role;
 select 'booking suite passed' as result;

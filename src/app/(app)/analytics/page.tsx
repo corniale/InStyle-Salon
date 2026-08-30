@@ -30,6 +30,7 @@ export default function AnalyticsPage() {
     <div className="space-y-6">
       <h1 className="text-[20px] font-bold">Analytics</h1>
       <RetentionSummary branchId={branchId} />
+      <BookingFunnelCard branchId={branchId} />
       <MonthlyTrend branchId={branchId} />
       <PeakPeriods branchId={branchId} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -97,6 +98,96 @@ interface Retention {
   at_risk_clients: number;
   lapsed_clients: number;
   never_returned: number;
+}
+
+// ---------------------------------------------------------------------------
+// Booking funnel: inquiry → booked → showed, per channel — what each
+// discovery channel is actually worth — plus how bookings end, and
+// whether deposits change the no-show rate (the data behind the pending
+// deposit policy).
+// ---------------------------------------------------------------------------
+
+interface FunnelRow { channel: string; inquiries: number; booked: number; showed: number }
+interface OutcomeRow {
+  total: number; billed: number; no_show: number; cancelled: number; moved: number;
+  with_deposit: number; no_show_with_deposit: number;
+}
+
+const FUNNEL_CHANNEL: Record<string, string> = {
+  call: "Calls", fb: "Facebook", walk_in: "Walk-in", other: "Other",
+};
+
+function BookingFunnelCard({ branchId }: { branchId: string | null }) {
+  const q = useQuery(async () => {
+    const supabase = createClient();
+    const [funnel, outcomes] = await Promise.all([
+      supabase.rpc("f_booking_funnel", { p_branch: branchId }),
+      supabase.rpc("f_booking_outcomes", { p_branch: branchId }),
+    ]);
+    return {
+      funnel: unwrap(funnel) as FunnelRow[],
+      outcomes: (unwrap(outcomes) as OutcomeRow[])[0] ?? null,
+    };
+  }, [branchId]);
+
+  if (q.status === "error") {
+    return (
+      <Card title="Booking funnel">
+        <ErrorState message="The booking funnel did not load." onRetry={q.retry} />
+      </Card>
+    );
+  }
+  if (q.status !== "ready") {
+    return <Card title="Booking funnel"><SkeletonRows rows={3} cols={4} /></Card>;
+  }
+  const { funnel, outcomes } = q.data;
+  if (funnel.length === 0 && (outcomes == null || outcomes.total === 0)) {
+    return null; // nothing yet — the card appears once bookings/inquiries exist
+  }
+  const pct = (a: number, b: number) => (b > 0 ? `${Math.round((a / b) * 100)}%` : "—");
+  return (
+    <Card title="Booking funnel">
+      <p className="mb-2 text-[11px] text-text-muted">
+        Since bookings began. Inquiry → booked → showed measures what each
+        channel is worth; log every inquiry to keep it honest.
+      </p>
+      {funnel.length > 0 && (
+        <Table>
+          <thead>
+            <tr>
+              <Th>Channel</Th>
+              <Th align="right">Inquiries</Th>
+              <Th align="right">Booked</Th>
+              <Th align="right">Showed</Th>
+              <Th align="right">Inquiry → showed</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {funnel.map((f) => (
+              <tr key={f.channel}>
+                <Td>{FUNNEL_CHANNEL[f.channel] ?? f.channel}</Td>
+                <Td align="right" className="tnum">{f.inquiries}</Td>
+                <Td align="right" className="tnum">{f.booked}</Td>
+                <Td align="right" className="tnum">{f.showed}</Td>
+                <Td align="right" className="tnum">{pct(f.showed, f.inquiries)}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+      {outcomes != null && outcomes.total > 0 && (
+        <p className="mt-2 text-[11px] text-text-muted">
+          Bookings overall: {outcomes.total} made · {outcomes.billed} billed ·{" "}
+          {outcomes.no_show} no-shows
+          {outcomes.with_deposit > 0 && (
+            <> ({outcomes.no_show_with_deposit} of {outcomes.with_deposit} with a
+            deposit — the number that will settle the deposit policy)</>
+          )}
+          {" "}· {outcomes.cancelled} cancelled · {outcomes.moved} moved.
+        </p>
+      )}
+    </Card>
+  );
 }
 
 function RetentionSummary({ branchId }: { branchId: string | null }) {

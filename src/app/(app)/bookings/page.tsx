@@ -92,7 +92,12 @@ export default function BookingsPage() {
   const [branch, setBranch] = useState(branchId ?? branches[0]?.id ?? "");
   const [date, setDate] = useState(todayISO());
   const [nonce, setNonce] = useState(0);
-  const [formOpen, setFormOpen] = useState<null | { edit?: BookingRow; move?: BookingRow; slot?: string }>(null);
+  const [formOpen, setFormOpen] = useState<null | {
+    edit?: BookingRow;
+    move?: BookingRow;
+    slot?: string;
+    inquiry?: { id: string; client_name: string | null; phone: string | null };
+  }>(null);
 
   const q = useQuery(async () => {
     const supabase = createClient();
@@ -158,6 +163,12 @@ export default function BookingsPage() {
           </Button>
         </div>
       </div>
+
+      <FollowUpsCard branch={branch} nonce={nonce} onChanged={refresh}
+        onMove={(b) => setFormOpen({ move: b })} />
+
+      <InquiriesCard branch={branch} nonce={nonce} onChanged={refresh}
+        onConvert={(inq) => setFormOpen({ inquiry: inq })} />
 
       {q.status === "loading" && <Card><SkeletonRows rows={10} cols={4} /></Card>}
       {q.status === "error" && (
@@ -394,6 +405,282 @@ function BookingCardRow({ b, nowMins, techNames, onEdit, onMove, onStatus }: {
 }
 
 // ---------------------------------------------------------------------------
+// Follow-ups: the salon's Q15 practice as a worklist. Today's active
+// bookings and tomorrow's, with one-tap outcomes; the call or FB message
+// stays human — the app supplies the list and records what happened.
+// ---------------------------------------------------------------------------
+
+interface FollowUpRow {
+  id: string;
+  booking_date: string;
+  starts_at: string;
+  status: string;
+  followed_up_at: string | null;
+  follow_up_result: string | null;
+  clients: { full_name: string | null; phone: string; phone_declined: boolean } | null;
+  booking_services: { services: { name: string } | null }[];
+}
+
+function FollowUpsCard({ branch, nonce, onChanged, onMove }: {
+  branch: string;
+  nonce: number;
+  onChanged: () => void;
+  onMove: (b: BookingRow) => void;
+}) {
+  const q = useQuery(async () => {
+    const res = await createClient()
+      .from("bookings")
+      .select("id, booking_date, starts_at, ends_at, bucket, technician_id, status, deposit_cents, deposit_method, deposit_reference, note, ticket_id, followed_up_at, follow_up_result, clients(id, full_name, phone, phone_declined), booking_services(service_id, duration_min, services(name))")
+      .eq("branch_id", branch)
+      .gte("booking_date", todayISO())
+      .lte("booking_date", addDays(todayISO(), 1))
+      .in("status", ["booked", "confirmed"])
+      .order("booking_date")
+      .order("starts_at");
+    return unwrap(res) as unknown as (BookingRow & FollowUpRow)[];
+  }, [branch, nonce]);
+
+  async function outcome(b: FollowUpRow, result: "confirmed" | "no_answer" | "cancelled") {
+    await createClient()
+      .from("bookings")
+      .update({
+        followed_up_at: new Date().toISOString(),
+        follow_up_result: result,
+        ...(result === "confirmed" ? { status: "confirmed" } : {}),
+        ...(result === "cancelled" ? { status: "cancelled" } : {}),
+      })
+      .eq("id", b.id);
+    onChanged();
+  }
+
+  const rows = q.status === "ready"
+    ? q.data.filter((b) => b.followed_up_at == null)
+    : [];
+  if (q.status !== "ready" || rows.length === 0) return null;
+
+  const today = rows.filter((b) => b.booking_date === todayISO());
+  const tomorrow = rows.filter((b) => b.booking_date !== todayISO());
+
+  function line(b: BookingRow & FollowUpRow) {
+    const label = b.clients?.full_name
+      ?? (b.clients?.phone_declined ? "Walk-in" : b.clients?.phone ?? "—");
+    return (
+      <div key={b.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[13px]">
+        <span className="tnum text-[11px] text-text-muted">{fmtTime(b.starts_at)}</span>
+        <span className="font-bold"><Truncate text={label} max={22} /></span>
+        {!b.clients?.phone_declined && (
+          <span className="text-[11px] text-text-muted tnum">{b.clients?.phone}</span>
+        )}
+        <span className="text-[11px] text-text-muted">
+          <Truncate
+            text={b.booking_services.map((s) => s.services?.name ?? "?").join(", ")}
+            max={30}
+          />
+        </span>
+        <span className="ml-auto flex gap-3 text-[11px]">
+          <button className="font-bold hover:underline" onClick={() => void outcome(b, "confirmed")}>
+            Confirmed
+          </button>
+          <button className="hover:underline" onClick={() => void outcome(b, "no_answer")}>
+            No answer
+          </button>
+          <button className="hover:underline" onClick={() => onMove(b)}>Move</button>
+          <button className="text-brand-red hover:underline"
+            onClick={() => void outcome(b, "cancelled")}>
+            Cancel
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <Card title={`To follow up — ${rows.length}`}>
+      <p className="mb-2 text-[11px] text-text-muted">
+        Message or call through FB/phone as usual, then tap the outcome here.
+      </p>
+      {today.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-text-muted">Today</div>
+          <div className="divide-y divide-border">{today.map(line)}</div>
+        </div>
+      )}
+      {tomorrow.length > 0 && (
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-text-muted">Tomorrow</div>
+          <div className="divide-y divide-border">{tomorrow.map(line)}</div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inquiries: the funnel's front door — "like an open ticket" for someone
+// who asked but hasn't booked. One tap converts to a booking.
+// ---------------------------------------------------------------------------
+
+interface InquiryRow {
+  id: string;
+  channel: string;
+  client_name: string | null;
+  phone: string | null;
+  interest: string | null;
+  created_at: string;
+}
+
+const CHANNEL_LABEL: Record<string, string> = {
+  call: "Call", fb: "Facebook", walk_in: "Walk-in", other: "Other",
+};
+
+function InquiriesCard({ branch, nonce, onChanged, onConvert }: {
+  branch: string;
+  nonce: number;
+  onChanged: () => void;
+  onConvert: (inq: { id: string; client_name: string | null; phone: string | null }) => void;
+}) {
+  const { profile } = useSession();
+  const [channel, setChannel] = useState("fb");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [interest, setInterest] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [closingId, setClosingId] = useState<string | null>(null);
+  const [closeReason, setCloseReason] = useState("");
+
+  const q = useQuery(async () => {
+    const res = await createClient()
+      .from("inquiries")
+      .select("id, channel, client_name, phone, interest, created_at")
+      .eq("branch_id", branch)
+      .eq("status", "open")
+      .order("created_at", { ascending: false })
+      .limit(30);
+    return unwrap(res) as InquiryRow[];
+  }, [branch, nonce]);
+
+  async function add() {
+    if (name.trim() === "" && phone.trim() === "") {
+      setError("An inquiry needs at least a name or a phone number.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error: err } = await createClient().from("inquiries").insert({
+      branch_id: branch,
+      channel,
+      client_name: name.trim() || null,
+      phone: phone.trim() || null,
+      interest: interest.trim() || null,
+      created_by: profile.id,
+    });
+    setBusy(false);
+    if (err) {
+      setError("The inquiry was not saved. Try again.");
+      return;
+    }
+    setName(""); setPhone(""); setInterest("");
+    onChanged();
+  }
+
+  async function close(id: string) {
+    await createClient()
+      .from("inquiries")
+      .update({ status: "closed", closed_reason: closeReason.trim() || null })
+      .eq("id", id);
+    setClosingId(null);
+    setCloseReason("");
+    onChanged();
+  }
+
+  const rows = q.status === "ready" ? q.data : [];
+
+  return (
+    <Card title={`Inquiries${rows.length > 0 ? ` — ${rows.length} open` : ""}`}>
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <Field label="Channel">
+          <Select value={channel} className="w-28"
+            onChange={(e) => setChannel(e.target.value)}>
+            <option value="fb">Facebook</option>
+            <option value="call">Call</option>
+            <option value="walk_in">Walk-in</option>
+            <option value="other">Other</option>
+          </Select>
+        </Field>
+        <Field label="Name">
+          <Input value={name} className="w-36" onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Phone">
+          <Input inputMode="numeric" value={phone} className="w-32"
+            onChange={(e) => setPhone(e.target.value)} />
+        </Field>
+        <Field label="Asking about">
+          <Input value={interest} className="w-44"
+            onChange={(e) => setInterest(e.target.value)} />
+        </Field>
+        <Button busy={busy} busyLabel="Adding" onClick={() => void add()}>
+          Log inquiry
+        </Button>
+      </div>
+      {error && <p className="mb-2 text-[11px] text-brand-red">{error}</p>}
+
+      {rows.length === 0 ? (
+        <p className="text-[11px] text-text-muted">
+          No open inquiries. Log one whenever someone asks about a price or a
+          service but does not book — that is the funnel&apos;s starting line.
+        </p>
+      ) : (
+        <div className="divide-y divide-border">
+          {rows.map((r) => (
+            <div key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[13px]">
+              <span className="rounded-[4px] bg-surface-page px-1 text-[10px]">
+                {CHANNEL_LABEL[r.channel] ?? r.channel}
+              </span>
+              <span className="font-bold"><Truncate text={r.client_name ?? "—"} max={20} /></span>
+              {r.phone && <span className="text-[11px] text-text-muted tnum">{r.phone}</span>}
+              {r.interest && (
+                <span className="text-[11px] text-text-muted">
+                  <Truncate text={r.interest} max={32} />
+                </span>
+              )}
+              <span className="ml-auto flex items-center gap-3 text-[11px]">
+                {closingId === r.id ? (
+                  <>
+                    <Input value={closeReason} className="h-7 w-36"
+                      placeholder="Reason (optional)"
+                      onChange={(e) => setCloseReason(e.target.value)} />
+                    <button className="text-brand-red hover:underline"
+                      onClick={() => void close(r.id)}>
+                      Close it
+                    </button>
+                    <button className="text-text-muted hover:underline"
+                      onClick={() => { setClosingId(null); setCloseReason(""); }}>
+                      keep
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="font-bold hover:underline"
+                      onClick={() => onConvert({ id: r.id, client_name: r.client_name, phone: r.phone })}>
+                      Book
+                    </button>
+                    <button className="text-text-muted hover:underline"
+                      onClick={() => setClosingId(r.id)}>
+                      Close
+                    </button>
+                  </>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Form: the notebook page. Client search identical in spirit to the POS.
 // ---------------------------------------------------------------------------
 
@@ -407,7 +694,12 @@ let keyCounter = 1;
 const nextKey = () => keyCounter++;
 
 function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
-  state: null | { edit?: BookingRow; move?: BookingRow; slot?: string };
+  state: null | {
+    edit?: BookingRow;
+    move?: BookingRow;
+    slot?: string;
+    inquiry?: { id: string; client_name: string | null; phone: string | null };
+  };
   branch: string;
   date: string;
   capacity: CapacityRow[];
@@ -478,7 +770,11 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
       setNote(source.note ?? "");
     } else {
       setSelected(null);
-      setNewName(""); setNewPhone("");
+      // Converting an inquiry: carry its name/phone into the form, and
+      // pre-run the search so an existing client record can be picked.
+      setNewName(state?.inquiry?.client_name ?? "");
+      setNewPhone(state?.inquiry?.phone ?? "");
+      setClientSearch(state?.inquiry?.phone ?? state?.inquiry?.client_name ?? "");
       setBookDate(date);
       setTime(state?.slot ?? "10:00");
       setLines([{ key: nextKey(), service_id: "", durationInput: "" }]);
@@ -566,12 +862,20 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
       })),
     };
     const supabase = createClient();
-    const { error: err } = moving
+    const { data: rpcData, error: err } = moving
       ? await supabase.rpc("move_booking", { p_original: moving.id, p_payload: payload })
       : await supabase.rpc("save_booking", {
           p_payload: payload,
           ...(editing ? { p_booking: editing.id } : {}),
         });
+    if (!err && state?.inquiry) {
+      // The inquiry that started this booking converts: funnel data.
+      const bookingIdNew = (rpcData as { booking_id?: string } | null)?.booking_id;
+      await supabase
+        .from("inquiries")
+        .update({ status: "booked", ...(bookingIdNew ? { booking_id: bookingIdNew } : {}) })
+        .eq("id", state.inquiry.id);
+    }
     setBusy(false);
     if (err) {
       setError(/full|booked in this window/i.test(err.message)
@@ -591,7 +895,11 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
       onClose={onClose}
     >
       <div className="space-y-4">
-        <Field label="Client">
+        {/* NOT wrapped in <Field>: Field renders a <label>, and a label
+            around both the input and the result buttons forwards clicks to
+            the input — selecting a client silently did nothing. */}
+        <div>
+          <span className="mb-1 block text-[11px] text-text-muted">Client</span>
           {selected ? (
             <div className="flex items-center gap-2 text-[13px]">
               <span className="font-bold">
@@ -600,7 +908,7 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
               {!selected.phone_declined && (
                 <span className="text-text-muted tnum">{selected.phone}</span>
               )}
-              <button className="text-[11px] text-text-muted hover:underline"
+              <button type="button" className="text-[11px] text-text-muted hover:underline"
                 onClick={() => setSelected(null)}>
                 change
               </button>
@@ -608,11 +916,12 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
           ) : (
             <div className="relative">
               <Input placeholder="Search name or phone" value={clientSearch}
+                aria-label="Search client"
                 onChange={(e) => setClientSearch(e.target.value)} />
               {results.length > 0 && (
-                <div className="absolute z-10 mt-1 w-full rounded-[4px] border border-border bg-surface-card shadow">
+                <div className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-[4px] border border-border bg-surface-card shadow">
                   {results.map((c) => (
-                    <button key={c.id}
+                    <button key={c.id} type="button"
                       className="flex w-full items-center justify-between px-2 py-1 text-left text-[13px] hover:bg-surface-page"
                       onClick={() => { setSelected(c); setResults([]); setClientSearch(""); }}>
                       <span><Truncate text={c.full_name ?? "Walk-in"} max={24} /></span>
@@ -625,7 +934,7 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
               )}
             </div>
           )}
-        </Field>
+        </div>
         {!selected && (
           <div className="flex flex-wrap gap-4">
             <Field label="New client name">
