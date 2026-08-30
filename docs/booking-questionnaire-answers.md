@@ -78,6 +78,40 @@ independent contractors who choose their own schedules; currently about
 it.** The approved schedule becomes the booking calendar's capacity
 source. (The schema already has a `shift_blocks` table to build on.)
 
+## C. Service times *(answered 2026-08-30, via the 2026 Features &
+Benefits guide + Q5 follow-up)*
+
+**Q4 — durations:** taken from the guide's InStyle page; applied to the
+catalogue via `supabase/scripts/service_durations_seed.sql` (midpoint of
+each range, total client-in-chair time). The guide also covers the sister
+businesses (Naitay Spa, Rainbrow Aesthetic, Cutchi Barbershop) — their
+menus/durations are on file for when those catalogues onboard.
+
+**Q5 — mid-service waiting (technician free during processing):**
+| Service | Processing wait |
+|---|---|
+| Hair Color / Hi-lites | 30–45 min |
+| Keratin Mask | 30–60 min |
+| Rebond | ~1 hr (depends on hair) |
+| Keratin Opti Straight | ~1 hr |
+| Air Perm | ~1 hr |
+| Brazilian Botox | ~1 hr |
+
+### Design implications
+- Booking must model chemical services as hands-on + processing +
+  finish: the CHAIR is occupied for the full duration, but the
+  TECHNICIAN is free during processing to take a short service. This is
+  the single biggest capacity lever on hair — a rebond blocks a chair
+  for ~3h15 but only ~2h of technician time. Phase 1 of booking can
+  treat duration as a solid block (safe, simpler); the processing-split
+  optimisation is a fast-follow once the calendar is trusted.
+- Catalogue notes: the guide lists AIR PERM and HAIRDO but no matching
+  active service exists (likely booked under OTHERS (HAIR) / styling
+  services) — owner to decide whether to add them as proper services.
+  BALAYAGE (without treatment), BANGS, MILK SPA, BLOWER STYLE, HAIR IRON
+  STYLE, CHANGE POLISH, FOOTSCRUB W/ MANI.PEDI., OTHERS have no guide
+  duration — flagged 'review' by the seed.
+
 ## Still awaited
 - B: technician roster details (names, types, levels, schedules)
 - C: service durations; mid-service waits; two-staff services
