@@ -112,6 +112,55 @@ menus/durations are on file for when those catalogues onboard.
   STYLE, CHANGE POLISH, FOOTSCRUB W/ MANI.PEDI., OTHERS have no guide
   duration — flagged 'review' by the seed.
 
+**Q6 — two-staff services** *(answered 2026-08-30)*: none. Packages
+(e.g. Foot Spa with Mani & Pedi) are usually one technician, sometimes
+shared between two — but no single service inherently needs two staff at
+once. (The POS assist field already covers the shared case.)
+
+## D. How bookings work today *(answered 2026-08-30)*
+
+**Q7 — lead time:** mixed — same day, a day ahead, and a week ahead all
+happen.
+
+**Q8 — notebook fields per booking:**
+Name · Address · Phone · Service(s) · Preferred time & date ·
+Preferred technician (optional — usually OLD clients) · OLD or NEW ·
+Inquiry source if NEW.
+
+**Q9 — volume:** no actual booked-vs-walk-in data. Traffic estimate:
+BRANCH alone averages ~950 clients monthly (~32/day).
+
+**Q10 — reservation semantics:** bookings DO reserve the slot. In heavy
+overload a booked client may still wait a bit if the technician is
+running over, but the reservation is real, not a queue position.
+
+**Q11 — group bookings:** no weddings/debuts. Friends booking together
+happens but is very rare — no special group feature needed; front desk
+can enter several bookings on the same slot.
+
+**Q12 — inquiries:** YES, tracked — inquiries that don't result in a
+visit are noted, "like an open ticket." The inquiry → booked → showed
+funnel matches how they already think.
+
+### Design implications
+- The booking form IS the notebook page: client (search existing by
+  name/phone, or new with town/barangay + inquiry source — all existing
+  fields), service(s), date, time, optional preferred technician, and
+  the new/old flag the POS already carries. Nothing new to invent.
+- Preferred technician optional → two booking kinds: "any technician"
+  (consumes type capacity) and "named technician" (consumes that
+  person's capacity). Old clients drive the named kind.
+- Lead times up to a week → a 2-week bookable horizon is ample.
+- Reservation is a hard hold against scheduled capacity (Q10), not a
+  queue hint. Overruns are reality; phase 1 shows the day's load
+  honestly rather than promising exact start times.
+- Inquiry log confirmed as a first-class light object: name/phone
+  (optional), source, service interest, notes; one tap converts to a
+  booking; unconverted = funnel data the discovery-method analytics
+  have been waiting for.
+- ~32 clients/day at BRANCH sets the scale: a day view must comfortably
+  show ~30-40 bookings + capacity at a glance.
+
 ## Still awaited
 - B: technician roster details (names, types, levels, schedules)
 - C: service durations; mid-service waits; two-staff services
