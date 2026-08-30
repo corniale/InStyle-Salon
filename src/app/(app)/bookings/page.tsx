@@ -241,6 +241,11 @@ const DAY_END = 18 * 60;
 const DAY_SPAN = DAY_END - DAY_START;
 const LANE_H = 44;
 const HOURS = Array.from({ length: 10 }, (_, i) => 8 + i);
+// The 15-minute booking grid, drawn as faint ticks between the hour lines
+// so taps visibly land on quarter-hour boundaries.
+const QUARTERS = Array.from(
+  { length: DAY_SPAN / SLOT_MIN }, (_, i) => DAY_START + i * SLOT_MIN,
+).filter((m) => m % 60 !== 0);
 
 function pct(m: number): number {
   return ((Math.min(Math.max(m, DAY_START), DAY_END) - DAY_START) / DAY_SPAN) * 100;
@@ -367,6 +372,13 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
                     row.techId ?? undefined,
                   )}
                 >
+                  {QUARTERS.map((m) => (
+                    <span key={m}
+                      className={`pointer-events-none absolute inset-y-0 border-l ${
+                        m % 30 === 0 ? "border-border/70" : "border-border/40"
+                      }`}
+                      style={{ left: `${pct(m)}%` }} />
+                  ))}
                   {HOURS.map((h) => (
                     <span key={h}
                       className="pointer-events-none absolute inset-y-0 border-l border-border"
@@ -463,8 +475,9 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
       )}
 
       <p className="mt-2 text-[11px] text-text-muted">
-        Tap an empty spot on a row to book that time; tap a booking for its
-        actions.{date === todayISO() ? " The red line is now." : ""}
+        Tap an empty spot on a row to book that time — taps snap to the
+        15-minute ticks. Tap a booking for its actions.
+        {date === todayISO() ? " The red line is now." : ""}
       </p>
     </Card>
   );
