@@ -16,6 +16,7 @@ import {
 } from "@/components/ui";
 import { csvPesos, downloadCsv } from "@/lib/csv";
 import { fmtDate } from "@/lib/dates";
+import { DateInput } from "@/components/date-input";
 import { Pagination } from "@/components/client-bits";
 
 interface ProductOpt {
@@ -671,8 +672,8 @@ function DeliveryModal({ open, products, branches, onClose, onDone }: {
               onChange={(e) => setCostInput(e.target.value)} />
           </Field>
           <Field label="Date">
-            <Input type="date" value={f.date} max={todayISO()} className="w-40"
-              onChange={(e) => f.setDate(e.target.value)} />
+            <DateInput value={f.date} max={todayISO()} className="w-40"
+              onChange={f.setDate} />
           </Field>
         </div>
         <Field label="Supplier">
@@ -780,8 +781,8 @@ function TakeOutModal({ open, adjust, products, branches, onClose, onDone }: {
               onChange={(e) => f.setQtyInput(e.target.value)} />
           </Field>
           <Field label="Date">
-            <Input type="date" value={f.date} max={todayISO()} className="w-40"
-              onChange={(e) => f.setDate(e.target.value)} />
+            <DateInput value={f.date} max={todayISO()} className="w-40"
+              onChange={f.setDate} />
           </Field>
         </div>
         <Field label={adjust ? "Reason (required)" : "Note"}>

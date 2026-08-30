@@ -19,6 +19,7 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
 import { fmtDate } from "@/lib/dates";
+import { DateInput } from "@/components/date-input";
 import type {
   Client, DiscountType, Package, PaymentMethod, Service, ServiceType,
   Technician, TicketPayload,
@@ -1228,10 +1229,10 @@ function NewTicketForm() {
       <Card title="Date and payment">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Field label="Date" hint="Backdating is allowed until that day's cash is closed">
-            <Input
-              type="date" value={ticketDate}
+            <DateInput
+              value={ticketDate}
               max={new Date().toLocaleDateString("sv-SE")}
-              onChange={(e) => { markDirty(); setTicketDate(e.target.value); }}
+              onChange={(d) => { markDirty(); setTicketDate(d); }}
             />
           </Field>
         </div>

@@ -5,7 +5,7 @@
 // and optionally the past-months dropdown. Every analytics-style page uses
 // this same control so the filters read identically everywhere.
 
-import { Input } from "@/components/ui";
+import { DateInput } from "@/components/date-input";
 
 export interface Period {
   kind: "today" | "month" | "ytd" | "day" | "pastmonth" | "range";
@@ -106,37 +106,22 @@ export function PeriodPicker({ value, onChange, withPastMonths, withRange }: {
 
       {withRange ? (
         <div className="flex items-center gap-2">
-          {/* Fixed-width wrappers: the input's base w-full must not win in a
-              flex row, or the field stretches and wraps the whole header. */}
-          <span className="w-40 shrink-0">
-            <Input type="date" value={value.from} aria-label="From"
-              onChange={(e) => {
-                const from = e.target.value;
-                if (from) onChange({ kind: "range", from, to: value.to < from ? from : value.to });
-              }} />
-          </span>
+          <DateInput className="w-36 shrink-0" value={value.from} aria-label="From"
+            onChange={(from) =>
+              onChange({ kind: "range", from, to: value.to < from ? from : value.to })} />
           <span className="text-[13px] text-text-muted">to</span>
-          <span className="w-40 shrink-0">
-            <Input type="date" value={value.to} aria-label="To"
-              onChange={(e) => {
-                const to = e.target.value;
-                if (to) onChange({ kind: "range", from: value.from > to ? to : value.from, to });
-              }} />
-          </span>
+          <DateInput className="w-36 shrink-0" value={value.to} aria-label="To"
+            onChange={(to) =>
+              onChange({ kind: "range", from: value.from > to ? to : value.from, to })} />
         </div>
       ) : (
-        <span className="w-40 shrink-0">
-          <Input
-            type="date"
-            value={value.kind === "day" ? value.from : ""}
-            max={todayISO()}
-            aria-label="Date"
-            onChange={(e) => {
-              const d = e.target.value;
-              if (d) onChange({ kind: "day", from: d, to: d });
-            }}
-          />
-        </span>
+        <DateInput
+          className="w-36 shrink-0"
+          value={value.kind === "day" ? value.from : ""}
+          max={todayISO()}
+          aria-label="Date"
+          onChange={(d) => onChange({ kind: "day", from: d, to: d })}
+        />
       )}
     </div>
   );

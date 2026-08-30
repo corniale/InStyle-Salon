@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
+import { DateInput } from "@/components/date-input";
 import type { Client, Service, ServiceType } from "@/lib/types";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
@@ -144,11 +145,8 @@ export default function BookingsPage() {
             >
               Today
             </button>
-            <span className="w-28 shrink-0">
-              <Input type="date" value={date} className="h-8"
-                onChange={(e) => e.target.value && setDate(e.target.value)}
-                aria-label="Booking date" />
-            </span>
+            <DateInput className="w-32 shrink-0" value={date}
+              onChange={setDate} aria-label="Booking date" />
             <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
               onClick={() => setDate(addDays(date, 1))}>→</button>
           </div>
@@ -663,9 +661,9 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
 
         <div className="flex flex-wrap gap-4">
           <Field label="Date">
-            <Input type="date" value={bookDate} className="w-40"
+            <DateInput value={bookDate} className="w-40"
               min={todayISO()} max={addDays(todayISO(), 14)}
-              onChange={(e) => e.target.value && setBookDate(e.target.value)} />
+              onChange={setBookDate} />
           </Field>
           <Field label="Start">
             <Select value={time} className="w-28"

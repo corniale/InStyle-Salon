@@ -61,6 +61,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       }
 
       const branches = (branchesRes.data ?? []) as Branch[];
+      // Main branch first, everywhere a branch list renders (the header
+      // switcher reads All · MAIN · BRANCH, matching how the salon says it).
+      branches.sort((a, b) =>
+        (a.code.includes("MAIN") ? 0 : 1) - (b.code.includes("MAIN") ? 0 : 1)
+        || a.name.localeCompare(b.name));
       // Only businesses the user can actually see a branch of (RLS already
       // filtered the branches; this keeps the picker honest for managers).
       const visibleBusinessIds = new Set(branches.map((b) => b.business_id));

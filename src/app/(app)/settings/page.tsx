@@ -12,6 +12,7 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
 import { fmtDate } from "@/lib/dates";
+import { DateInput } from "@/components/date-input";
 import type { Branch, Service, ServiceType, Technician } from "@/lib/types";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
@@ -1772,7 +1773,7 @@ function AddTechnicianModal({ open, branches, initialBranchId, onClose, onDone }
           </Select>
         </Field>
         <Field label="Hire date">
-          <Input type="date" value={hiredOn} onChange={(e) => setHiredOn(e.target.value)} />
+          <DateInput value={hiredOn} onChange={setHiredOn} />
         </Field>
         <Field label="Type" hint="e.g. Hairdresser, Nail technician">
           <Input value={specialty} list="specialty-suggestions"
