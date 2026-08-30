@@ -262,11 +262,14 @@ function stackLanes(rows: BookingRow[]): BookingRow[][] {
   return lanes.length > 0 ? lanes : [[]];
 }
 
-function slotFromX(clientX: number, rect: DOMRect): string {
+function slotMinsFromX(clientX: number, rect: DOMRect): number {
   const frac = (clientX - rect.left) / rect.width;
   const m = DAY_START + Math.floor((frac * DAY_SPAN) / SLOT_MIN) * SLOT_MIN;
-  const c = Math.min(Math.max(m, DAY_START), DAY_END - SLOT_MIN);
-  return `${String(Math.floor(c / 60)).padStart(2, "0")}:${String(c % 60).padStart(2, "0")}`;
+  return Math.min(Math.max(m, DAY_START), DAY_END - SLOT_MIN);
+}
+
+function timeStr(m: number): string {
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 }
 
 function clientLabel(b: BookingRow): string {
@@ -288,6 +291,9 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // Mouse hover: which row and 15-minute cell the pointer is over, so the
+  // cell lights up with a time flag before committing to a tap.
+  const [hover, setHover] = useState<{ row: string; m: number } | null>(null);
   const capacity = cap?.capacity ?? 0;
 
   // Blocks: bookings that hold (or held) a chair. Moved, cancelled and
@@ -364,13 +370,25 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
                   )}
                 </div>
                 <div
-                  className="relative flex-1 cursor-pointer hover:bg-surface-page/60"
+                  className="relative flex-1 cursor-pointer"
                   style={{ height: row.lanes.length * LANE_H + 8 }}
-                  title="Tap an empty spot for a new booking"
                   onClick={(e) => onSlot(
-                    slotFromX(e.clientX, e.currentTarget.getBoundingClientRect()),
+                    timeStr(slotMinsFromX(e.clientX, e.currentTarget.getBoundingClientRect())),
                     row.techId ?? undefined,
                   )}
+                  onMouseMove={(e) => {
+                    // Over a booking block a click selects it, not the
+                    // slot — drop the highlight there to match.
+                    if ((e.target as HTMLElement).closest("button")) {
+                      setHover(null);
+                      return;
+                    }
+                    setHover({
+                      row: row.key,
+                      m: slotMinsFromX(e.clientX, e.currentTarget.getBoundingClientRect()),
+                    });
+                  }}
+                  onMouseLeave={() => setHover(null)}
                 >
                   {QUARTERS.map((m) => (
                     <span key={m}
@@ -387,6 +405,23 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
                   {nowMins != null && nowMins > DAY_START && nowMins < DAY_END && (
                     <span className="pointer-events-none absolute inset-y-0 z-10 border-l-2 border-brand-red"
                       style={{ left: `${pct(nowMins)}%` }} />
+                  )}
+                  {hover?.row === row.key && (
+                    <>
+                      <span
+                        className="pointer-events-none absolute inset-y-0 bg-ink/10"
+                        style={{
+                          left: `${pct(hover.m)}%`,
+                          width: `${(SLOT_MIN / DAY_SPAN) * 100}%`,
+                        }}
+                      />
+                      <span
+                        className="pointer-events-none absolute z-20 -translate-x-1/2 whitespace-nowrap rounded-[4px] bg-ink px-1 py-px text-[10px] font-bold text-white tnum"
+                        style={{ left: `${pct(hover.m + SLOT_MIN / 2)}%`, top: 2 }}
+                      >
+                        {fmtTime(timeStr(hover.m))}
+                      </span>
+                    </>
                   )}
                   {row.lanes.map((lane, li) => lane.map((b) => {
                     const start = mins(b.starts_at);
