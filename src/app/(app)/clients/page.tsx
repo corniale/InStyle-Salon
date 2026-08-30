@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import { Pagination, StatusBadge, formatBirthday, formatClientNo, CLIENTS_PAGE_SIZE as PAGE } from "@/components/client-bits";
 import { csvCell } from "@/lib/csv";
+import { fmtDate } from "@/lib/dates";
 
 interface ClientRow {
   id: string;
@@ -217,10 +218,10 @@ function ClientsList() {
           esc(c.town), esc(c.barangay), esc(c.inquiry_source),
           esc(formatBirthday(c.birth_month, c.birth_day)),
           esc(c.special_discount_pct != null ? Number(c.special_discount_pct) : ""),
-          esc(c.first_visit_on),
+          esc(fmtDate(c.first_visit_on)),
           esc(r == null ? "" : r.visit_count > 1 ? "Returning" : "New"),
           esc(r?.visit_count ?? ""),
-          esc(r?.last_visit ?? ""),
+          esc(r?.last_visit ? fmtDate(r.last_visit) : ""),
           pesos(r?.lifetime_spend_cents ?? null),
           pesos(avgSpendCents(r)),
           esc(r?.status ?? ""),

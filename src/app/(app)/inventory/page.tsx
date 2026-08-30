@@ -15,6 +15,7 @@ import {
   SkeletonRows, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
 import { csvPesos, downloadCsv } from "@/lib/csv";
+import { fmtDate } from "@/lib/dates";
 import { Pagination } from "@/components/client-bits";
 
 interface ProductOpt {
@@ -313,7 +314,7 @@ function StockCard({ q, shown, hasProducts }: {
                   {g.avg_cost_cents != null ? formatCentavos(g.avg_cost_cents) : "—"}
                 </Td>
                 <Td align="right" className="tnum">{formatCentavos(g.value_cents)}</Td>
-                <Td className="tnum">{g.last ?? "—"}</Td>
+                <Td className="tnum">{fmtDate(g.last)}</Td>
               </tr>
             ))}
           </tbody>
@@ -384,7 +385,7 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
         ["Date", "SKU", "Product", "Brand", "Size", "Unit", "Branch",
          "Movement", "Qty", "Unit cost", "Supplier", "Note"],
         all.map((r) => [
-          r.moved_on, r.sku, r.product_name, r.brand, r.size, r.unit,
+          fmtDate(r.moved_on), r.sku, r.product_name, r.brand, r.size, r.unit,
           r.branch_name, KIND_LABEL[r.kind] ?? r.kind, r.signed_qty,
           r.unit_cost_cents != null ? csvPesos(r.unit_cost_cents) : "",
           r.supplier, r.note,
@@ -453,7 +454,7 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
           <tbody>
             {q.data.rows.map((r) => (
               <tr key={r.id}>
-                <Td className="tnum">{r.moved_on}</Td>
+                <Td className="tnum">{fmtDate(r.moved_on)}</Td>
                 <Td>
                   <Truncate
                     text={[r.product_name, [r.brand, r.size].filter(Boolean).join(", ")]

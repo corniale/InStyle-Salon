@@ -18,6 +18,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
+import { fmtDate } from "@/lib/dates";
 import type {
   Client, DiscountType, Package, PaymentMethod, Service, ServiceType,
   Technician, TicketPayload,
@@ -939,7 +940,7 @@ function NewTicketForm() {
                 Clear
               </button>
               {matched.first_visit_on && (
-                <span className="text-text-muted"> · first visit {matched.first_visit_on}</span>
+                <span className="text-text-muted"> · first visit {fmtDate(matched.first_visit_on)}</span>
               )}
               {clientPackages.length > 0 && (
                 <span className="text-text-muted">

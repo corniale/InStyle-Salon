@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 import { csvPesos, downloadCsv } from "@/lib/csv";
+import { fmtDate } from "@/lib/dates";
 import { Pagination } from "@/components/client-bits";
 
 interface DailyCashRow {
@@ -99,7 +100,7 @@ export default function CashPage() {
          "Discounts given", "Net cash to remit", "Counted", "Variance", "Closed"],
         days.map((d) => [
           name.get(d.branch_id) ?? d.branch_id,
-          d.business_date,
+          fmtDate(d.business_date),
           csvPesos(d.opening_float_cents),
           csvPesos(d.gross_sales_cents),
           csvPesos(d.technician_share_cents),
@@ -613,7 +614,7 @@ function ExpensesCard({ branchId, date, single, locked, expenses, error, onChang
           <tbody>
             {(pagedExpenses ?? []).map((e) => (
               <tr key={e.id}>
-                {!single && <Td className="tnum">{e.spent_on}</Td>}
+                {!single && <Td className="tnum">{fmtDate(e.spent_on)}</Td>}
                 <Td>{e.category}</Td>
                 <Td><Truncate text={e.description ?? "—"} max={48} /></Td>
                 <Td>{e.paid_from}</Td>

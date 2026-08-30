@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos } from "@/lib/money";
+import { fmtDate } from "@/lib/dates";
 import {
   Button, Card, EmptyState, ErrorState, SkeletonRows, Stat, Table, Td, Th, Truncate,
 } from "@/components/ui";
@@ -150,7 +151,7 @@ function TicketDetail() {
             ) : null}
           </h1>
           <p className="text-[13px] text-text-muted tnum">
-            {t.ticket_date} · {t.branches?.name ?? "—"}
+            {fmtDate(t.ticket_date)} · {t.branches?.name ?? "—"}
             {" · "}
             {t.clients ? (
               <Link href={`/clients/detail?id=${t.clients.id}`} className="hover:underline">

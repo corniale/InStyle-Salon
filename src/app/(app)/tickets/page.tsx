@@ -16,6 +16,7 @@ import {
   Table, Td, Th, Textarea, Truncate, useSort,
 } from "@/components/ui";
 import { csvPesos, downloadCsv } from "@/lib/csv";
+import { fmtDate } from "@/lib/dates";
 import { Pagination } from "@/components/client-bits";
 import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 import { listQueue, removeFromQueue, type QueuedTicket } from "@/lib/offline/queue";
@@ -224,7 +225,7 @@ export default function TicketsPage() {
          "Total", "Company share", "New client", "Status", "Void reason"],
         all.map((t) => [
           t.series_no,
-          t.ticket_date,
+          fmtDate(t.ticket_date),
           clientLabel(t),
           t.clients?.phone_declined ? "declined" : t.clients?.phone,
           t.ticket_lines.map((l) =>
@@ -302,7 +303,7 @@ export default function TicketsPage() {
                     </Link>
                   </Td>
                   <Td className={`tnum${t.ticket_date !== todayISO() ? " font-bold text-brand-red" : ""}`}>
-                    {t.ticket_date}
+                    {fmtDate(t.ticket_date)}
                   </Td>
                   <Td>
                     {t.clients ? (
@@ -420,7 +421,7 @@ export default function TicketsPage() {
                         </span>
                       )}
                     </Td>
-                    {showDate && <Td className="tnum">{t.ticket_date}</Td>}
+                    {showDate && <Td className="tnum">{fmtDate(t.ticket_date)}</Td>}
                     <Td>
                       {t.clients ? (
                         <Link href={`/clients/detail?id=${t.clients.id}`}

@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
+import { fmtDate, fmtMonthDay } from "@/lib/dates";
 import {
   Button, Card, EmptyState, ErrorState, Field, Select, SkeletonRows,
   Table, Td, Th, Truncate,
@@ -212,7 +213,7 @@ export default function SchedulePage() {
             <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
               onClick={() => setWeekStart(addDays(weekStart, -7))}>←</button>
             <span className="px-2 text-[13px] tnum">
-              {weekStart} – {addDays(weekStart, 6)}
+              {fmtDate(weekStart)} – {fmtDate(addDays(weekStart, 6))}
             </span>
             <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
               onClick={() => setWeekStart(addDays(weekStart, 7))}>→</button>
@@ -224,7 +225,7 @@ export default function SchedulePage() {
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {approved ? (
             <span className="rounded-[4px] bg-surface-page px-2 py-1 text-[11px] font-bold">
-              Approved{week?.approved_at ? ` · ${week.approved_at.slice(0, 10)}` : ""}
+              Approved{week?.approved_at ? ` · ${fmtDate(week.approved_at)}` : ""}
             </span>
           ) : week ? (
             <span className="rounded-[4px] bg-brand-red-tint px-2 py-1 text-[11px] text-brand-red-deep">
@@ -273,7 +274,7 @@ export default function SchedulePage() {
                   <Th key={d} align="center">
                     {DOW[i]}
                     <span className="block text-[10px] font-normal text-text-muted tnum">
-                      {d.slice(5)}
+                      {fmtMonthDay(d)}
                     </span>
                   </Th>
                 ))}

@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
+import { fmtDate } from "@/lib/dates";
 import {
   Card, EmptyState, ErrorState, Select, SkeletonRows, Stat, Table, Td, Th, Truncate, useSort,
 } from "@/components/ui";
@@ -661,7 +662,7 @@ function AtRiskList({ branchId }: { branchId: string | null }) {
                   </Td>
                   <Td className="tnum">{r.phone_declined ? "declined" : r.phone}</Td>
                   <Td align="right" className="tnum">{r.visit_count}</Td>
-                  <Td className="tnum">{r.last_visit}</Td>
+                  <Td className="tnum">{fmtDate(r.last_visit)}</Td>
                   <Td align="right" className="tnum">
                     {r.median_interval_days != null ? `${r.median_interval_days}d` : "—"}
                   </Td>

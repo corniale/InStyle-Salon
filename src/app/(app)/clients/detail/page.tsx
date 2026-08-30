@@ -12,6 +12,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos } from "@/lib/money";
+import { fmtDate } from "@/lib/dates";
 import type { Client, Package } from "@/lib/types";
 import { useMemo } from "react";
 import {
@@ -156,7 +157,7 @@ function ClientDetail() {
             {client.phone_declined ? "Phone declined" : client.phone}
             {client.town && ` · ${client.town}`}
             {client.barangay && `, ${client.barangay}`}
-            {client.first_visit_on && ` · first visit ${client.first_visit_on}`}
+            {client.first_visit_on && ` · first visit ${fmtDate(client.first_visit_on)}`}
             {formatBirthday(client.birth_month, client.birth_day) &&
               ` · birthday ${formatBirthday(client.birth_month, client.birth_day)}`}
             {client.special_discount_pct != null &&
@@ -451,8 +452,8 @@ function PackagesTable({ packages }: { packages: PackageRow[] }) {
             <Td align="right" className="tnum">
               {p.sessions_total - p.sessions_used} of {p.sessions_total}
             </Td>
-            <Td className="tnum">{p.purchased_on}</Td>
-            <Td className="tnum">{p.expires_on ?? "—"}</Td>
+            <Td className="tnum">{fmtDate(p.purchased_on)}</Td>
+            <Td className="tnum">{fmtDate(p.expires_on)}</Td>
             <Td align="right" className="tnum">{formatCentavos(p.amount_paid_cents)}</Td>
           </tr>
         ))}
@@ -523,7 +524,7 @@ function VisitHistoryTable({ visits, linesByDate, branchName }: {
       <tbody>
         {rows.map(({ v, branch, services, techs, rating, paid }) => (
           <tr key={`${v.visit_date}:${v.branch_id}`}>
-            <Td className="tnum">{v.visit_date}</Td>
+            <Td className="tnum">{fmtDate(v.visit_date)}</Td>
             <Td>{branch}</Td>
             <Td><Truncate text={services || "—"} max={44} /></Td>
             <Td><Truncate text={techs || "—"} max={24} /></Td>

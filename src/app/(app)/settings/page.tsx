@@ -11,6 +11,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
+import { fmtDate } from "@/lib/dates";
 import type { Branch, Service, ServiceType, Technician } from "@/lib/types";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
@@ -1692,7 +1693,7 @@ function TechniciansTab({ branches }: { branches: Branch[] }) {
                 <Td>{branchName}</Td>
                 <Td>{t.specialty ?? "—"}</Td>
                 <Td>{t.skill_level ? SKILL_LABEL[t.skill_level] : "—"}</Td>
-                <Td className="tnum">{t.hired_on ?? "—"}</Td>
+                <Td className="tnum">{fmtDate(t.hired_on)}</Td>
                 <Td>{t.active ? "Active" : <span className="text-text-muted">Retired</span>}</Td>
                 <Td align="right">
                   <ToggleActive table="technicians" id={t.id} name={t.full_name}
