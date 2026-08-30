@@ -121,8 +121,11 @@ Small flagged items:
   wanted app-wide (one flag per table).
 
 Stage 2 proper:
-- Inquiry funnel and appointments/booking (front-desk first; public online
-  booking later) — spec awaiting the salon's questionnaire answers.
+- Booking phase 1 part 1 SHIPPED (0035: weekly schedules with owner
+  approval, people-capacity calendar, booking form with deposits, moves,
+  named holds, POS handoff). Part 2 pending: follow-ups worklist,
+  inquiry log, funnel analytics. Then: processing-split capacity
+  (technician free during chemical waits), public online booking.
 - Timekeeping, banlaw and cash-advance settlement modelling (also closes
   the last centavos of drift vs the paper Daily Records).
 

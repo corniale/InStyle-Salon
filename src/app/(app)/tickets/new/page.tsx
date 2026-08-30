@@ -154,6 +154,10 @@ function NewTicketForm() {
   // Resuming an open (parked) ticket: same pre-fill, but saving edits the
   // ticket in place — keep it open or bill & close it.
   const resumeId = sp.get("resume");
+  // Arriving from the booking calendar: the form pre-fills from the
+  // booking (client, services, technician, deposit) and the booking is
+  // linked to the ticket after a successful save.
+  const bookingId = sp.get("booking");
   const loadId = reviseId ?? resumeId;
   const { branchId, branches, profile } = useSession();
   // Front desk / manager: their branch. Owner on consolidated: default to
@@ -419,6 +423,60 @@ function NewTicketForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadId, prefillNonce]);
 
+  // Booking prefill: fetch once, then apply as soon as the price book is
+  // ready (prices come from the catalogue, not the booking).
+  interface BookingPrefill {
+    branch_id: string;
+    technician_id: string | null;
+    deposit_cents: number | null;
+    deposit_method: string | null;
+    deposit_reference: string | null;
+    clients: Client | null;
+    booking_services: { service_id: string }[];
+  }
+  const [bookingRow, setBookingRow] = useState<BookingPrefill | null>(null);
+  const bookingApplied = useRef(false);
+  useEffect(() => {
+    if (!bookingId) return;
+    void (async () => {
+      const { data } = await createClient()
+        .from("bookings")
+        .select("branch_id, technician_id, deposit_cents, deposit_method, deposit_reference, clients(*), booking_services(service_id)")
+        .eq("id", bookingId)
+        .maybeSingle();
+      if (data) setBookingRow(data as unknown as BookingPrefill);
+    })();
+  }, [bookingId]);
+  useEffect(() => {
+    if (!bookingRow || bookingApplied.current || ref.status !== "ready") return;
+    bookingApplied.current = true;
+    setFormBranchId(bookingRow.branch_id);
+    if (bookingRow.clients) applyClient(bookingRow.clients);
+    if (bookingRow.booking_services.length > 0) {
+      setLines(bookingRow.booking_services.map((s) => {
+        const price = priceBook.get(s.service_id);
+        return {
+          ...emptyLine(),
+          service_id: s.service_id,
+          technician_id: bookingRow.technician_id ?? "",
+          priceInput: price ? String(price.price_cents / 100) : "",
+        };
+      }));
+    }
+    if (bookingRow.deposit_cents != null && bookingRow.deposit_cents > 0) {
+      setPayments([
+        {
+          key: nextKey(),
+          method: (bookingRow.deposit_method ?? "gcash") as PaymentMethod,
+          amountInput: String(bookingRow.deposit_cents / 100),
+          reference: bookingRow.deposit_reference ?? "booking deposit",
+        },
+        { key: nextKey(), method: "cash", amountInput: "", reference: "" },
+      ]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookingRow, ref.status]);
+
   // Warn before navigating away from unsaved work (spec §6).
   useEffect(() => {
     if (!dirty) return;
@@ -623,7 +681,7 @@ function NewTicketForm() {
 
     try {
       const supabase = createClient();
-      const { error } = action === "park"
+      const { data: rpcData, error } = action === "park"
         ? await supabase.rpc("open_ticket", { p_payload: payload })
         : resumeId
           ? await supabase.rpc("save_open_ticket", {
@@ -671,6 +729,19 @@ function NewTicketForm() {
           : friendlyDbError(error.message));
         setBusy(false);
         return;
+      }
+
+      // A ticket born from a booking closes the loop: link the ticket and
+      // advance the booking (billed on close, arrived while parked).
+      if (bookingId) {
+        const ticketId = (rpcData as { ticket_id?: string } | null)?.ticket_id;
+        await supabase
+          .from("bookings")
+          .update({
+            ...(ticketId ? { ticket_id: ticketId } : {}),
+            status: action === "save" ? "billed" : "arrived",
+          })
+          .eq("id", bookingId);
       }
 
       setDirty(false);

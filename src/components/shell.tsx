@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Receipt, Users, Banknote, LineChart, UserRound,
   Settings, Scale, LogOut, Package, Menu, PanelLeftClose, PanelLeft, X,
+  CalendarDays, CalendarClock,
 } from "lucide-react";
 import { useSession } from "@/components/session-context";
 import { Wordmark } from "@/components/wordmark";
@@ -33,6 +34,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const nav = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard, show: canSeeAnalytics },
     { href: "/tickets", label: "Tickets", icon: Receipt, show: true },
+    { href: "/bookings", label: "Bookings", icon: CalendarDays, show: true },
+    { href: "/schedule", label: "Schedule", icon: CalendarClock, show: true },
     { href: "/clients", label: "Clients", icon: Users, show: true },
     { href: "/cash", label: "Daily cash", icon: Banknote, show: true },
     { href: "/inventory", label: "Inventory", icon: Package, show: true },
