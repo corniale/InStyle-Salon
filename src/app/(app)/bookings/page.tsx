@@ -1,10 +1,12 @@
 "use client";
 
 // Booking calendar (booking spec, phase 1): real holds against
-// people-capacity. Two bucket columns (Hair / Nails & Foot), half-hour
-// rows 8:00–18:00, remaining capacity per row, and a form that mirrors
-// the paper notebook. Capacity is enforced server-side (save_booking);
-// this page shows conflicts before they happen and surfaces the server's
+// people-capacity, drawn as a staff-row × time-column timeline — two
+// sections (Hair first, then Nails & Foot), one row per scheduled
+// technician plus an "Any technician" lane for no-preference holds.
+// Block width is the booked duration (catalogue estimates captured at
+// booking time). Capacity is enforced server-side (save_booking); this
+// page shows conflicts before they happen and surfaces the server's
 // refusal when two tablets race.
 
 import { useEffect, useMemo, useState } from "react";
@@ -16,7 +18,7 @@ import { formatCentavos, parsePesos } from "@/lib/money";
 import { DateInput } from "@/components/date-input";
 import type { Client, Service, ServiceType } from "@/lib/types";
 import {
-  Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
+  Button, Card, ErrorState, Field, Input, Modal, Select,
   SkeletonRows, Truncate,
 } from "@/components/ui";
 
@@ -96,6 +98,7 @@ export default function BookingsPage() {
     edit?: BookingRow;
     move?: BookingRow;
     slot?: string;
+    tech?: string;
     inquiry?: { id: string; client_name: string | null; phone: string | null };
   }>(null);
 
@@ -182,12 +185,12 @@ export default function BookingsPage() {
               the full roster. Confirm the week on the Schedule page.
             </p>
           )}
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-4">
             {(["hair", "nail_foot"] as const).map((bucket) => {
               const cap = q.data.capacity.find((c) => c.bucket === bucket);
               const rows = q.data.bookings.filter((b) => b.bucket === bucket);
               return (
-                <BucketColumn
+                <TimelineSection
                   key={bucket}
                   title={bucket === "hair" ? "Hair" : "Nails & Foot"}
                   cap={cap}
@@ -195,7 +198,7 @@ export default function BookingsPage() {
                   date={date}
                   nowMins={date === todayISO() ? nowMins : null}
                   techNames={techNames}
-                  onSlot={(slot) => setFormOpen({ slot })}
+                  onSlot={(slot, tech) => setFormOpen({ slot, tech })}
                   onEdit={(b) => setFormOpen({ edit: b })}
                   onMove={(b) => setFormOpen({ move: b })}
                   onStatus={async (b, status) => {
@@ -226,180 +229,331 @@ export default function BookingsPage() {
   );
 }
 
-function BucketColumn({ title, cap, bookings, date, nowMins, techNames, onSlot, onEdit, onMove, onStatus }: {
+// ---------------------------------------------------------------------------
+// Timeline: staff rows × time columns. The "Any technician" lane holds
+// no-preference bookings (stacked when they overlap); each scheduled
+// technician gets a row of their own. Tapping empty space books that
+// time — on a technician's row, with that technician pre-filled.
+// ---------------------------------------------------------------------------
+
+const DAY_START = 8 * 60;
+const DAY_END = 18 * 60;
+const DAY_SPAN = DAY_END - DAY_START;
+const LANE_H = 44;
+const HOURS = Array.from({ length: 10 }, (_, i) => 8 + i);
+
+function pct(m: number): number {
+  return ((Math.min(Math.max(m, DAY_START), DAY_END) - DAY_START) / DAY_SPAN) * 100;
+}
+
+/** Greedy lane stacking so overlapping blocks in one row never cover
+    each other; the row grows a lane per simultaneous booking. */
+function stackLanes(rows: BookingRow[]): BookingRow[][] {
+  const lanes: BookingRow[][] = [];
+  for (const b of [...rows].sort((a, z) => mins(a.starts_at) - mins(z.starts_at))) {
+    const lane = lanes.find((l) => mins(l[l.length - 1].ends_at) <= mins(b.starts_at));
+    if (lane) lane.push(b); else lanes.push([b]);
+  }
+  return lanes.length > 0 ? lanes : [[]];
+}
+
+function slotFromX(clientX: number, rect: DOMRect): string {
+  const frac = (clientX - rect.left) / rect.width;
+  const m = DAY_START + Math.floor((frac * DAY_SPAN) / SLOT_MIN) * SLOT_MIN;
+  const c = Math.min(Math.max(m, DAY_START), DAY_END - SLOT_MIN);
+  return `${String(Math.floor(c / 60)).padStart(2, "0")}:${String(c % 60).padStart(2, "0")}`;
+}
+
+function clientLabel(b: BookingRow): string {
+  return b.clients?.full_name
+    ?? (b.clients?.phone_declined ? "Walk-in" : b.clients?.phone ?? "—");
+}
+
+function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlot, onEdit, onMove, onStatus }: {
   title: string;
   cap: CapacityRow | undefined;
   bookings: BookingRow[];
   date: string;
   nowMins: number | null;
   techNames: Map<string, string>;
-  onSlot: (slot: string) => void;
+  onSlot: (slot: string, tech?: string) => void;
   onEdit: (b: BookingRow) => void;
   onMove: (b: BookingRow) => void;
   onStatus: (b: BookingRow, status: string) => void;
 }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const capacity = cap?.capacity ?? 0;
-  const active = bookings.filter((b) => ACTIVE.has(b.status));
 
-  function freeAt(slot: string): number {
-    const t = mins(slot) + 1;
-    const busy = active.filter((b) => mins(b.starts_at) <= t && mins(b.ends_at) > t).length;
-    return Math.max(capacity - busy, 0);
+  // Blocks: bookings that hold (or held) a chair. Moved, cancelled and
+  // no-show ones fall to the list below instead of cluttering the grid.
+  const shown = bookings.filter((b) => ACTIVE.has(b.status) || b.status === "billed");
+  const parked = bookings.filter((b) =>
+    b.status === "moved" || b.status === "cancelled" || b.status === "no_show");
+
+  const techIds = cap?.technician_ids ?? [];
+  const offRoster = [...new Set(
+    shown.map((b) => b.technician_id)
+      .filter((id): id is string => id != null && !techIds.includes(id)),
+  )];
+
+  const rows: { key: string; label: string; sub?: string; techId: string | null; lanes: BookingRow[][] }[] = [
+    {
+      key: "any", label: "Any technician", sub: "no preference", techId: null,
+      lanes: stackLanes(shown.filter((b) => b.technician_id == null)),
+    },
+    ...techIds.map((id, i) => ({
+      key: id, label: cap?.technician_names[i] ?? "—", techId: id,
+      lanes: stackLanes(shown.filter((b) => b.technician_id === id)),
+    })),
+    ...offRoster.map((id) => ({
+      key: id, label: techNames.get(id) ?? "Off-schedule", sub: "not on today's schedule",
+      techId: id, lanes: stackLanes(shown.filter((b) => b.technician_id === id)),
+    })),
+  ];
+
+  const selected = shown.find((b) => b.id === selectedId) ?? null;
+
+  // Client-side sanity check only — set_booking_status does not re-run
+  // the capacity window, so refuse an obviously refilled slot here.
+  function reinstate(b: BookingRow) {
+    setNote(null);
+    const s = mins(b.starts_at);
+    const e = mins(b.ends_at);
+    const overlaps = (x: BookingRow) =>
+      ACTIVE.has(x.status) && mins(x.starts_at) < e && mins(x.ends_at) > s;
+    const clash = b.technician_id
+      ? bookings.some((x) => x.technician_id === b.technician_id && overlaps(x))
+      : bookings.filter(overlaps).length >= capacity;
+    if (clash) {
+      setNote("That window is taken now — make a fresh booking at a free time instead.");
+      return;
+    }
+    onStatus(b, "booked");
   }
 
   return (
     <Card title={`${title} — ${capacity} on duty`}>
-      <p className="mb-2 text-[11px] text-text-muted">
-        {cap && cap.technician_names.length > 0
-          ? cap.technician_names.join(" · ")
-          : "Nobody scheduled."}
-      </p>
-      <div className="divide-y divide-border">
-        {SLOTS.map((slot) => {
-          const starting = bookings.filter((b) => {
-            const m = mins(b.starts_at);
-            return m >= mins(slot) && m < mins(slot) + SLOT_MIN;
-          });
-          const free = freeAt(slot);
-          const onHour = slot.endsWith(":00");
-          return (
-            // The whole empty stretch of a row is a tap target for a new
-            // booking at that time; booking cards swallow their own taps.
-            <div
-              key={slot}
-              className={`flex items-start gap-2 py-0.5 hover:bg-surface-page ${
-                starting.length > 0 ? "min-h-9" : "min-h-6 cursor-pointer"
-              }`}
-              onClick={() => onSlot(slot)}
-              title={`New booking at ${fmtTime(slot)}`}
-            >
-              <span
-                className={`w-16 shrink-0 pt-1 text-left text-[11px] tnum ${
-                  onHour ? "text-text-body" : "text-text-muted"
-                }`}
-              >
-                {fmtTime(slot)}
-              </span>
-              <div
-                className="min-w-0 flex-1 space-y-1"
-                onClick={(e) => { if (starting.length > 0) e.stopPropagation(); }}
-              >
-                {starting.map((b) => (
-                  <BookingCardRow
-                    key={b.id} b={b} nowMins={nowMins} techNames={techNames}
-                    onEdit={onEdit} onMove={onMove} onStatus={onStatus}
-                  />
-                ))}
-              </div>
-              <span
-                className={`shrink-0 pt-1 text-[10px] tnum ${
-                  free === 0 ? "font-bold text-brand-red" : "text-text-muted"
-                }`}
-              >
-                {free} free
-              </span>
+      {note && <p className="mb-2 text-[11px] text-brand-red">{note}</p>}
+      <div className="overflow-x-auto">
+        <div className="min-w-[860px]">
+          <div className="flex">
+            <div className="w-36 shrink-0" />
+            <div className="relative h-5 flex-1">
+              {HOURS.map((h) => (
+                <span key={h}
+                  className="absolute -translate-x-1/2 text-[10px] text-text-muted tnum"
+                  style={{ left: `${pct(h * 60)}%` }}>
+                  {h % 12 === 0 ? 12 : h % 12} {h >= 12 ? "PM" : "AM"}
+                </span>
+              ))}
             </div>
-          );
-        })}
+          </div>
+          <div className="divide-y divide-border border-t border-border">
+            {rows.map((row) => (
+              <div key={row.key} className="flex">
+                <div className="w-36 shrink-0 py-2 pr-2 text-[12px] font-bold">
+                  <Truncate text={row.label} max={18} />
+                  {row.sub && (
+                    <span className="block text-[10px] font-normal text-text-muted">{row.sub}</span>
+                  )}
+                </div>
+                <div
+                  className="relative flex-1 cursor-pointer hover:bg-surface-page/60"
+                  style={{ height: row.lanes.length * LANE_H + 8 }}
+                  title="Tap an empty spot for a new booking"
+                  onClick={(e) => onSlot(
+                    slotFromX(e.clientX, e.currentTarget.getBoundingClientRect()),
+                    row.techId ?? undefined,
+                  )}
+                >
+                  {HOURS.map((h) => (
+                    <span key={h}
+                      className="pointer-events-none absolute inset-y-0 border-l border-border"
+                      style={{ left: `${pct(h * 60)}%` }} />
+                  ))}
+                  {nowMins != null && nowMins > DAY_START && nowMins < DAY_END && (
+                    <span className="pointer-events-none absolute inset-y-0 z-10 border-l-2 border-brand-red"
+                      style={{ left: `${pct(nowMins)}%` }} />
+                  )}
+                  {row.lanes.map((lane, li) => lane.map((b) => {
+                    const start = mins(b.starts_at);
+                    const dur = Math.max(mins(b.ends_at) - start, SLOT_MIN);
+                    const late = nowMins != null
+                      && (b.status === "booked" || b.status === "confirmed")
+                      && nowMins > start + 15;
+                    return (
+                      <button key={b.id} type="button"
+                        className={`absolute overflow-hidden rounded-[4px] border px-1.5 py-0.5 text-left text-[11px] leading-tight ${
+                          b.status === "billed" ? "border-border bg-surface-page opacity-50"
+                          : late ? "border-brand-red bg-brand-red-tint"
+                          : b.status === "arrived" ? "border-ink bg-surface-page"
+                          : "border-border bg-surface-card shadow-sm"
+                        } ${selectedId === b.id ? "ring-2 ring-ink" : ""}`}
+                        style={{
+                          left: `${pct(start)}%`,
+                          width: `calc(${(dur / DAY_SPAN) * 100}% - 2px)`,
+                          top: li * LANE_H + 4,
+                          height: LANE_H - 6,
+                          minWidth: 24,
+                        }}
+                        title={`${fmtTime(b.starts_at)}–${fmtTime(b.ends_at)} · ${clientLabel(b)}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedId(selectedId === b.id ? null : b.id);
+                        }}
+                      >
+                        <span className="block truncate font-bold">
+                          {clientLabel(b)}
+                          {late && <span className="ml-1 text-brand-red-deep">LATE</span>}
+                          {b.status !== "booked" && !late && (
+                            <span className="ml-1 font-normal text-text-muted">
+                              {STATUS_LABEL[b.status]}
+                            </span>
+                          )}
+                        </span>
+                        <span className="block truncate text-[10px] text-text-muted">
+                          {b.booking_services.map((s) => s.services?.name ?? "?").join(", ")}
+                        </span>
+                      </button>
+                    );
+                  }))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
+
+      {selected && (
+        <SelectedBookingBar b={selected} techNames={techNames}
+          onEdit={onEdit} onMove={onMove}
+          onStatus={(b, s) => { setSelectedId(null); onStatus(b, s); }} />
+      )}
+
+      {parked.length > 0 && (
+        <div className="mt-3 border-t border-border pt-2">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-text-muted">
+            Not happening — {parked.length}
+          </div>
+          <div className="divide-y divide-border">
+            {parked.map((b) => (
+              <div key={b.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[12px]">
+                <span className="tnum text-[11px] text-text-muted">{fmtTime(b.starts_at)}</span>
+                <span><Truncate text={clientLabel(b)} max={22} /></span>
+                <span className="rounded-[4px] bg-surface-page px-1 text-[10px]">
+                  {STATUS_LABEL[b.status]}
+                </span>
+                <span className="text-[11px] text-text-muted">
+                  <Truncate
+                    text={b.booking_services.map((s) => s.services?.name ?? "?").join(", ")}
+                    max={30}
+                  />
+                </span>
+                {(b.status === "cancelled" || b.status === "no_show") && (
+                  <button className="ml-auto text-[11px] font-bold hover:underline"
+                    onClick={() => reinstate(b)}>
+                    Reinstate
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <p className="mt-2 text-[11px] text-text-muted">
-        {date === todayISO()
-          ? "A red LATE badge appears 15 minutes past a booking's start."
-          : ""}
+        Tap an empty spot on a row to book that time; tap a booking for its
+        actions.{date === todayISO() ? " The red line is now." : ""}
       </p>
     </Card>
   );
 }
 
-function BookingCardRow({ b, nowMins, techNames, onEdit, onMove, onStatus }: {
+function SelectedBookingBar({ b, techNames, onEdit, onMove, onStatus }: {
   b: BookingRow;
-  nowMins: number | null;
   techNames: Map<string, string>;
   onEdit: (b: BookingRow) => void;
   onMove: (b: BookingRow) => void;
   onStatus: (b: BookingRow, status: string) => void;
 }) {
-  const inactive = !ACTIVE.has(b.status);
-  const late = nowMins != null
-    && (b.status === "booked" || b.status === "confirmed")
-    && nowMins > mins(b.starts_at) + 15;
-  const clientLabel = b.clients?.full_name
-    ?? (b.clients?.phone_declined ? "Walk-in" : b.clients?.phone ?? "—");
   return (
-    <div
-      className={`rounded-[4px] border px-2 py-1 text-[12px] ${
-        inactive ? "border-border opacity-50"
-        : late ? "border-brand-red"
-        : b.status === "arrived" ? "border-ink"
-        : "border-border"
-      }`}
-    >
-      <div className="flex flex-wrap items-center gap-x-2">
+    <div className="mt-3 rounded-[4px] border border-border bg-surface-page px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
         <span className="tnum text-[11px] text-text-muted">
           {fmtTime(b.starts_at)}–{fmtTime(b.ends_at)}
         </span>
-        <span className="font-bold"><Truncate text={clientLabel} max={22} /></span>
+        <span className="font-bold"><Truncate text={clientLabel(b)} max={26} /></span>
+        {b.clients && !b.clients.phone_declined && (
+          <span className="text-[11px] text-text-muted tnum">{b.clients.phone}</span>
+        )}
         {b.technician_id && (
-          <span className="rounded-[4px] bg-surface-page px-1 text-[10px]">
+          <span className="rounded-[4px] bg-surface-card px-1 text-[10px]">
             {techNames.get(b.technician_id) ?? "named"}
           </span>
         )}
-        {late && (
-          <span className="rounded-[4px] bg-brand-red-tint px-1 text-[10px] font-bold text-brand-red-deep">
-            LATE
-          </span>
-        )}
-        {(inactive || b.status === "confirmed" || b.status === "arrived") && (
-          <span className="rounded-[4px] bg-surface-page px-1 text-[10px]">
-            {STATUS_LABEL[b.status]}
-          </span>
-        )}
+        <span className="rounded-[4px] bg-surface-card px-1 text-[10px]">
+          {STATUS_LABEL[b.status]}
+        </span>
         {b.deposit_cents != null && b.deposit_cents > 0 && (
-          <span className="rounded-[4px] bg-surface-page px-1 text-[10px]"
+          <span className="rounded-[4px] bg-surface-card px-1 text-[10px]"
             title={`Deposit via ${b.deposit_method ?? "?"}${b.deposit_reference ? ` (${b.deposit_reference})` : ""}`}>
             dep {formatCentavos(b.deposit_cents)}
           </span>
         )}
       </div>
       <div className="text-[11px] text-text-muted">
-        <Truncate
-          text={b.booking_services.map((s) => s.services?.name ?? "?").join(", ")}
-          max={44}
-        />
+        {b.booking_services.map((s) => s.services?.name ?? "?").join(", ")}
+        {b.note ? ` · ${b.note}` : ""}
       </div>
-      {!inactive && (
-        <div className="mt-0.5 flex flex-wrap gap-3 text-[11px]">
-          {b.status === "booked" && (
-            <button className="hover:underline" onClick={() => onStatus(b, "confirmed")}>
-              Confirm
+      <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
+        {b.status === "booked" && (
+          <button className="hover:underline" onClick={() => onStatus(b, "confirmed")}>
+            Confirm
+          </button>
+        )}
+        {(b.status === "booked" || b.status === "confirmed") && (
+          <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
+            Arrived → ticket
+          </button>
+        )}
+        {b.status === "arrived" && !b.ticket_id && (
+          <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
+            Open ticket
+          </button>
+        )}
+        {/* Mistake-proofing: every stage before billed steps back one, so
+            a wrong tap never strands a booking. */}
+        {b.status === "confirmed" && (
+          <button className="hover:underline" onClick={() => onStatus(b, "booked")}>
+            Back to booked
+          </button>
+        )}
+        {b.status === "arrived" && (
+          <button className="hover:underline" onClick={() => onStatus(b, "confirmed")}>
+            Undo arrived
+          </button>
+        )}
+        {(b.status === "booked" || b.status === "confirmed") && (
+          <>
+            <button className="hover:underline" onClick={() => onEdit(b)}>Edit</button>
+            <button className="hover:underline" onClick={() => onMove(b)}>Move</button>
+            <button className="text-brand-red hover:underline"
+              onClick={() => onStatus(b, "no_show")}>
+              No-show
             </button>
-          )}
-          {b.status !== "arrived" && (
-            <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
-              Arrived → ticket
+            <button className="text-brand-red hover:underline"
+              onClick={() => onStatus(b, "cancelled")}>
+              Cancel
             </button>
-          )}
-          {b.status === "arrived" && !b.ticket_id && (
-            <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
-              Open ticket
-            </button>
-          )}
-          {b.status !== "arrived" && (
-            <>
-              <button className="hover:underline" onClick={() => onEdit(b)}>Edit</button>
-              <button className="hover:underline" onClick={() => onMove(b)}>Move</button>
-              <button className="text-brand-red hover:underline"
-                onClick={() => onStatus(b, "no_show")}>
-                No-show
-              </button>
-              <button className="text-brand-red hover:underline"
-                onClick={() => onStatus(b, "cancelled")}>
-                Cancel
-              </button>
-            </>
-          )}
-        </div>
-      )}
+          </>
+        )}
+        {b.status === "billed" && (
+          <span className="text-text-muted">
+            Billed — final. To reverse the sale, void its ticket on the Tickets page.
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -698,6 +852,7 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
     edit?: BookingRow;
     move?: BookingRow;
     slot?: string;
+    tech?: string;
     inquiry?: { id: string; client_name: string | null; phone: string | null };
   };
   branch: string;
@@ -778,7 +933,7 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
       setBookDate(date);
       setTime(state?.slot ?? "10:00");
       setLines([{ key: nextKey(), service_id: "", durationInput: "" }]);
-      setTechId("");
+      setTechId(state?.tech ?? "");
       setDepositInput(""); setDepositMethod("gcash"); setDepositRef("");
       setNote("");
     }
@@ -1002,6 +1157,15 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
             <Select value={techId} className="w-44"
               onChange={(e) => setTechId(e.target.value)}>
               <option value="">Any available</option>
+              {/* A row-tap prefill can outrun the bucket (no service picked
+                  yet) — keep the name visible instead of a blank select. */}
+              {techId !== "" && !(bucketTechs?.technician_ids ?? []).includes(techId) && (
+                <option value={techId}>
+                  {capacity
+                    .flatMap((c) => c.technician_ids.map((id, i) => [id, c.technician_names[i]] as const))
+                    .find(([id]) => id === techId)?.[1] ?? "Selected technician"}
+                </option>
+              )}
               {(bucketTechs?.technician_ids ?? []).map((id, i) => (
                 <option key={id} value={id}>{bucketTechs?.technician_names[i]}</option>
               ))}
