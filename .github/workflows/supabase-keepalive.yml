@@ -18,12 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Query the database through PostgREST
+        # Tables are locked to signed-in users (anon grants were revoked in
+        # hardening), so the ping calls business_date() — a harmless
+        # function anon may still execute, and a real database round-trip.
         run: |
-          echo "auth health:"
-          curl -s -w "\nHTTP %{http_code}\n" \
-            "https://sbvlwfwmasbealmhwzyl.supabase.co/auth/v1/health" \
-            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31"
-          echo "rest:"
-          curl -s -w "\nHTTP %{http_code}\n" \
-            "https://sbvlwfwmasbealmhwzyl.supabase.co/rest/v1/branches?select=id&limit=1" \
-            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31"
+          body=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://sbvlwfwmasbealmhwzyl.supabase.co/rest/v1/rpc/business_date" \
+            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31" \
+            -H "Content-Type: application/json" -d '{}')
+          echo "$body"
+          test "$(echo "$body" | tail -1)" = "200"
