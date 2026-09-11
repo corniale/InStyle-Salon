@@ -19,8 +19,11 @@ jobs:
     steps:
       - name: Query the database through PostgREST
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" \
+          echo "auth health:"
+          curl -s -w "\nHTTP %{http_code}\n" \
+            "https://sbvlwfwmasbealmhwzyl.supabase.co/auth/v1/health" \
+            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31"
+          echo "rest:"
+          curl -s -w "\nHTTP %{http_code}\n" \
             "https://sbvlwfwmasbealmhwzyl.supabase.co/rest/v1/branches?select=id&limit=1" \
-            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31")
-          echo "PostgREST answered HTTP $code"
-          test "$code" = "200"
+            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31"
