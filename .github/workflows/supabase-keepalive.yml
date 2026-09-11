@@ -21,7 +21,6 @@ jobs:
         run: |
           code=$(curl -s -o /dev/null -w "%{http_code}" \
             "https://sbvlwfwmasbealmhwzyl.supabase.co/rest/v1/branches?select=id&limit=1" \
-            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31" \
-            -H "Authorization: Bearer sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31")
+            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31")
           echo "PostgREST answered HTTP $code"
           test "$code" = "200"
