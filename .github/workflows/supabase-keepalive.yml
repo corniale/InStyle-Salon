@@ -1,0 +1,27 @@
+name: Supabase keepalive
+
+# The free-tier database pauses itself after about a week without
+# traffic, which takes the whole app down (login says "check the
+# connection"). This daily ping counts as real database activity, so
+# quiet stretches — holidays, vacations — never trigger the pause.
+#
+# The key below is the publishable anon key; it already ships inside the
+# app's client bundle, so it is not a secret.
+
+on:
+  schedule:
+    - cron: "37 21 * * *" # daily, 5:37 AM Manila
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query the database through PostgREST
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://sbvlwfwmasbealmhwzyl.supabase.co/rest/v1/branches?select=id&limit=1" \
+            -H "apikey: sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31" \
+            -H "Authorization: Bearer sb_publishable_oLa8nOAMiXagjAq5FwqtWg_iim1wy31")
+          echo "PostgREST answered HTTP $code"
+          test "$code" = "200"
