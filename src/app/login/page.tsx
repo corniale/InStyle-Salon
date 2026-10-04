@@ -20,6 +20,7 @@ function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   // Statically hosted, so no server redirect: an already-signed-in visitor
   // is sent through to the app from here.
@@ -52,6 +53,26 @@ function LoginForm() {
 
     router.replace(safeNext(params.get("next")));
     router.refresh();
+  }
+
+  async function sendReset() {
+    if (email.trim() === "") {
+      setError("Type your email above first, then tap the link again.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    // The email's link must come back to this deployment, base path and all.
+    const redirectTo =
+      `${window.location.origin}${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/reset-password/`;
+    const { error: err } = await createClient()
+      .auth.resetPasswordForEmail(email.trim(), { redirectTo });
+    setBusy(false);
+    if (err) {
+      setError("Could not send the reset email. Check the connection and try again.");
+      return;
+    }
+    setResetSent(true);
   }
 
   return (
@@ -99,6 +120,22 @@ function LoginForm() {
       <Button type="submit" variant="primary" busy={busy} busyLabel="Signing in" className="w-full">
         Sign in
       </Button>
+
+      {resetSent ? (
+        <p className="text-[12px] text-text-muted">
+          Reset link sent to <span className="font-bold">{email.trim()}</span>.
+          Open the email on this device and follow the link to set a new
+          password. Nothing arriving? Check spam, or the address.
+        </p>
+      ) : (
+        <button
+          type="button"
+          className="text-[12px] text-text-muted hover:text-text-body hover:underline"
+          onClick={() => void sendReset()}
+        >
+          Forgot password? Email me a reset link.
+        </button>
+      )}
     </form>
   );
 }
