@@ -18,24 +18,37 @@ import {
 } from "@/components/ui";
 import { BarList, LineChart } from "@/components/charts";
 import { Pagination, StatusBadge } from "@/components/client-bits";
+import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
 
 export default function AnalyticsPage() {
   const { branchId, canSeeAnalytics } = useSession();
+  // Data began January 2026, so the YTD default shows the same numbers
+  // the page always showed — until a narrower range is picked.
+  const [period, setPeriod] = useState<Period>(periodPreset("ytd"));
 
   if (!canSeeAnalytics) {
     return <EmptyState message="Analytics are available to the owner and branch managers." />;
   }
 
+  const { from, to } = period;
   return (
     <div className="space-y-6">
-      <h1 className="text-[20px] font-bold">Analytics</h1>
-      <RetentionSummary branchId={branchId} />
-      <BookingFunnelCard branchId={branchId} />
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-[20px] font-bold">Analytics</h1>
+        <PeriodPicker value={period} onChange={setPeriod} withRange />
+      </div>
+      <p className="-mt-4 text-[11px] text-text-muted">
+        The range filters retention, the booking funnel, peak periods and the
+        technician cards. The 12-month trend, rebooking intervals and the
+        at-risk list describe the whole history by nature.
+      </p>
+      <RetentionSummary branchId={branchId} from={from} to={to} />
+      <BookingFunnelCard branchId={branchId} from={from} to={to} />
       <MonthlyTrend branchId={branchId} />
-      <PeakPeriods branchId={branchId} />
+      <PeakPeriods branchId={branchId} from={from} to={to} />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <TechnicianServiceCard branchId={branchId} />
-        <UtilisationCard branchId={branchId} />
+        <TechnicianServiceCard branchId={branchId} from={from} to={to} />
+        <UtilisationCard branchId={branchId} from={from} to={to} />
       </div>
       <RebookingByService branchId={branchId} />
       <AtRiskList branchId={branchId} />
@@ -117,18 +130,20 @@ const FUNNEL_CHANNEL: Record<string, string> = {
   call: "Calls", fb: "Facebook", walk_in: "Walk-in", other: "Other",
 };
 
-function BookingFunnelCard({ branchId }: { branchId: string | null }) {
+function BookingFunnelCard({ branchId, from, to }: {
+  branchId: string | null; from: string; to: string;
+}) {
   const q = useQuery(async () => {
     const supabase = createClient();
     const [funnel, outcomes] = await Promise.all([
-      supabase.rpc("f_booking_funnel", { p_branch: branchId }),
-      supabase.rpc("f_booking_outcomes", { p_branch: branchId }),
+      supabase.rpc("f_booking_funnel", { p_branch: branchId, p_from: from, p_to: to }),
+      supabase.rpc("f_booking_outcomes", { p_branch: branchId, p_from: from, p_to: to }),
     ]);
     return {
       funnel: unwrap(funnel) as FunnelRow[],
       outcomes: (unwrap(outcomes) as OutcomeRow[])[0] ?? null,
     };
-  }, [branchId]);
+  }, [branchId, from, to]);
 
   if (q.status === "error") {
     return (
@@ -190,13 +205,15 @@ function BookingFunnelCard({ branchId }: { branchId: string | null }) {
   );
 }
 
-function RetentionSummary({ branchId }: { branchId: string | null }) {
+function RetentionSummary({ branchId, from, to }: {
+  branchId: string | null; from: string; to: string;
+}) {
   const q = useQuery(async () => {
     const res = await createClient().rpc("f_retention_summary", {
-      p_branch: branchId, p_from: null, p_to: null,
+      p_branch: branchId, p_from: from, p_to: to,
     });
     return unwrap(res) as Retention;
-  }, [branchId]);
+  }, [branchId, from, to]);
 
   return (
     <Card title="First visit to second visit">
@@ -257,13 +274,17 @@ function heatColor(value: number, max: number): string {
   return `color-mix(in srgb, var(--color-data-teal) ${pct}%, transparent)`;
 }
 
-function PeakPeriods({ branchId }: { branchId: string | null }) {
+function PeakPeriods({ branchId, from, to }: {
+  branchId: string | null; from: string; to: string;
+}) {
   const [mode, setMode] = useState<"month" | "dow" | "hour">("month");
 
   const q = useQuery(async () => {
-    const res = await createClient().rpc("f_peak_periods", { p_branch: branchId });
+    const res = await createClient().rpc("f_peak_periods", {
+      p_branch: branchId, p_from: from, p_to: to,
+    });
     return unwrap(res) as PeakRow[];
-  }, [branchId]);
+  }, [branchId, from, to]);
 
   return (
     <Card title="Peak periods">
@@ -449,13 +470,17 @@ const TECH_SERVICE_ACC: Record<string, (r: TechServiceRow) => unknown> = {
   minutes: (r) => r.avg_minutes,
 };
 
-function TechnicianServiceCard({ branchId }: { branchId: string | null }) {
+function TechnicianServiceCard({ branchId, from, to }: {
+  branchId: string | null; from: string; to: string;
+}) {
   const [serviceId, setServiceId] = useState("");
 
   const q = useQuery(async () => {
-    const res = await createClient().rpc("f_technician_service_stats", { p_branch: branchId });
+    const res = await createClient().rpc("f_technician_service_stats", {
+      p_branch: branchId, p_from: from, p_to: to,
+    });
     return unwrap(res) as TechServiceRow[];
-  }, [branchId]);
+  }, [branchId, from, to]);
 
   // Alphabetical for findability; the initial selection is still the
   // busiest service so the card opens on something meaningful.
@@ -567,15 +592,15 @@ interface UtilRow {
   utilisation_pct: number | null;
 }
 
-function UtilisationCard({ branchId }: { branchId: string | null }) {
+function UtilisationCard({ branchId, from, to }: {
+  branchId: string | null; from: string; to: string;
+}) {
   const q = useQuery(async () => {
-    const to = new Date().toLocaleDateString("sv-SE");
-    const from = new Date(Date.now() - 29 * 86400000).toLocaleDateString("sv-SE");
     const res = await createClient().rpc("f_technician_ranking", {
       p_branch: branchId, p_from: from, p_to: to, p_min_tickets: 1,
     });
     return unwrap(res) as UtilRow[];
-  }, [branchId]);
+  }, [branchId, from, to]);
 
   return (
     <Card title="Utilisation by technician (preview)">
@@ -584,7 +609,7 @@ function UtilisationCard({ branchId }: { branchId: string | null }) {
         <ErrorState message="Utilisation did not load." onRetry={q.retry} />
       )}
       {q.status === "ready" && q.data.length === 0 && (
-        <p className="text-[13px] text-text-muted">No service activity in the last 30 days.</p>
+        <p className="text-[13px] text-text-muted">No service activity in this period.</p>
       )}
       {q.status === "ready" && q.data.length > 0 && (
         <>
@@ -600,7 +625,7 @@ function UtilisationCard({ branchId }: { branchId: string | null }) {
               }))}
           />
           <p className="mt-2 text-[11px] text-text-muted">
-            Busy hours over the last 30 days, from recorded service times. True utilisation —
+            Busy hours over the selected period, from recorded service times. True utilisation —
             busy against scheduled hours — arrives with Stage 2 shift scheduling; this preview
             sharpens as the POS captures times.
           </p>
