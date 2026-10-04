@@ -3,11 +3,11 @@
 // Booking calendar (booking spec, phase 1): real holds against
 // people-capacity, drawn as a staff-row × time-column timeline — two
 // sections (Hair first, then Nails & Foot), one row per scheduled
-// technician plus an "Any technician" lane for no-preference holds.
-// Block width is the booked duration (catalogue estimates captured at
-// booking time). Capacity is enforced server-side (save_booking); this
-// page shows conflicts before they happen and surfaces the server's
-// refusal when two tablets race.
+// technician. No-preference holds are packed onto free technician rows
+// (dashed). Block width is the booked duration (catalogue estimates
+// captured at booking time). Capacity is enforced server-side
+// (save_booking); this page shows conflicts before they happen and
+// surfaces the server's refusal when two tablets race.
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -230,10 +230,11 @@ export default function BookingsPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Timeline: staff rows × time columns. The "Any technician" lane holds
-// no-preference bookings (stacked when they overlap); each scheduled
-// technician gets a row of their own. Tapping empty space books that
-// time — on a technician's row, with that technician pre-filled.
+// Timeline: staff rows × time columns, one row per scheduled technician.
+// No-preference bookings are packed onto whichever row is free (dashed
+// border — any free technician takes them), so empty grid space always
+// means real spare capacity. Tapping empty space books that time with
+// that technician pre-filled (changeable to "Any available" in the form).
 // ---------------------------------------------------------------------------
 
 const DAY_START = 8 * 60;
@@ -308,19 +309,41 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
       .filter((id): id is string => id != null && !techIds.includes(id)),
   )];
 
+  // No "Any technician" row: it made a window look open while every real
+  // technician was already busy. Instead each no-preference booking is
+  // packed onto the first technician row free for its window (drawn
+  // dashed — any free technician takes it). Empty grid space therefore
+  // means genuinely free capacity. Whatever cannot be placed lands on an
+  // overflow row that only appears when the day is overbooked.
+  const placed = new Map<string, BookingRow[]>();
+  for (const id of [...techIds, ...offRoster]) {
+    placed.set(id, shown.filter((b) => b.technician_id === id));
+  }
+  const overflow: BookingRow[] = [];
+  for (const b of shown
+    .filter((x) => x.technician_id == null)
+    .sort((a, z) => mins(a.starts_at) - mins(z.starts_at))) {
+    const s = mins(b.starts_at);
+    const e = mins(b.ends_at);
+    const home = techIds.find((id) =>
+      !(placed.get(id) ?? []).some((x) => mins(x.starts_at) < e && mins(x.ends_at) > s));
+    if (home) placed.get(home)!.push(b);
+    else overflow.push(b);
+  }
+
   const rows: { key: string; label: string; sub?: string; techId: string | null; lanes: BookingRow[][] }[] = [
-    {
-      key: "any", label: "Any technician", sub: "no preference", techId: null,
-      lanes: stackLanes(shown.filter((b) => b.technician_id == null)),
-    },
     ...techIds.map((id, i) => ({
       key: id, label: cap?.technician_names[i] ?? "—", techId: id,
-      lanes: stackLanes(shown.filter((b) => b.technician_id === id)),
+      lanes: stackLanes(placed.get(id) ?? []),
     })),
     ...offRoster.map((id) => ({
       key: id, label: techNames.get(id) ?? "Off-schedule", sub: "not on today's schedule",
-      techId: id, lanes: stackLanes(shown.filter((b) => b.technician_id === id)),
+      techId: id, lanes: stackLanes(placed.get(id) ?? []),
     })),
+    ...(overflow.length > 0 ? [{
+      key: "overflow", label: "Unplaced", sub: "no technician free", techId: null,
+      lanes: stackLanes(overflow),
+    }] : []),
   ];
 
   const selected = shown.find((b) => b.id === selectedId) ?? null;
@@ -436,7 +459,8 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
                           : late ? "border-brand-red bg-brand-red-tint"
                           : b.status === "arrived" ? "border-ink bg-surface-page"
                           : "border-border bg-surface-card shadow-sm"
-                        } ${selectedId === b.id ? "ring-2 ring-ink" : ""}`}
+                        } ${b.technician_id ? "" : "border-dashed"} ${
+                          selectedId === b.id ? "ring-2 ring-ink" : ""}`}
                         style={{
                           left: `${pct(start)}%`,
                           width: `calc(${(dur / DAY_SPAN) * 100}% - 2px)`,
@@ -444,7 +468,8 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
                           height: LANE_H - 6,
                           minWidth: 24,
                         }}
-                        title={`${fmtTime(b.starts_at)}–${fmtTime(b.ends_at)} · ${clientLabel(b)}`}
+                        title={`${fmtTime(b.starts_at)}–${fmtTime(b.ends_at)} · ${clientLabel(b)}${
+                          b.technician_id ? "" : " · any free technician"}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedId(selectedId === b.id ? null : b.id);
@@ -511,7 +536,8 @@ function TimelineSection({ title, cap, bookings, date, nowMins, techNames, onSlo
 
       <p className="mt-2 text-[11px] text-text-muted">
         Tap an empty spot on a row to book that time — taps snap to the
-        15-minute ticks. Tap a booking for its actions.
+        15-minute ticks. Tap a booking for its actions. A dashed block has
+        no named technician: any free technician takes it.
         {date === todayISO() ? " The red line is now." : ""}
       </p>
     </Card>
