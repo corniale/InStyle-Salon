@@ -26,7 +26,7 @@ const accentColor: Record<string, string> = {
 export function Shell({ children }: { children: React.ReactNode }) {
   const {
     profile, businesses, businessId, setBusinessId, business,
-    branches, branchId, setBranchId, branch, isOwner, canSeeAnalytics,
+    branches, branchId, setBranchId, branch, isAdminUp, canSeeAnalytics,
   } = useSession();
   const pathname = usePathname();
   const pending = usePendingSyncCount();
@@ -68,7 +68,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
     {
       label: "Setup",
       items: [
-        { href: "/settings", label: "Settings", icon: Settings, show: isOwner },
+        { href: "/settings", label: "Settings", icon: Settings, show: isAdminUp },
       ],
     },
   ]
@@ -264,7 +264,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
             {/* Branch switcher (accent use 1 of 3). */}
             <div className="flex items-center rounded-[4px] border border-border">
-              {isOwner && (
+              {isAdminUp && (
                 <SwitcherButton
                   label="All"
                   active={branchId === null}
@@ -278,7 +278,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   accent={accentColor[b.accent]}
                   active={branchId === b.id}
                   onClick={() => setBranchId(b.id)}
-                  disabled={!isOwner && b.id !== profile.branch_id}
+                  disabled={!isAdminUp && b.id !== profile.branch_id}
                 />
               ))}
             </div>

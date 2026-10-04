@@ -23,9 +23,9 @@ interface PriceRow { branch_id: string; service_id: string; price_cents: number;
 interface ProfileRow { id: string; full_name: string; role: string; branch_id: string | null; active: boolean }
 
 export default function SettingsPage() {
-  const { isOwner } = useSession();
-  if (!isOwner) {
-    return <EmptyState message="Settings are the owner's. Prices, targets and accounts live here." />;
+  const { isAdminUp } = useSession();
+  if (!isAdminUp) {
+    return <EmptyState message="Settings are for the owner and admin. Prices, targets and accounts live here." />;
   }
   return <SettingsBody />;
 }
@@ -1925,7 +1925,10 @@ function UsersTab({ branches }: { branches: Branch[] }) {
             {rows.map((p) => {
               // Your own row is read-only: demoting or deactivating yourself
               // locks you out of this page with no way back from the app.
+              // Owner rows are read-only for admins (database guard too):
+              // an admin manages staff, never the owner.
               const self = p.id === profile.id;
+              const locked = self || (profile.role === "admin" && p.role === "owner");
               return (
                 <tr key={p.id} className={p.active ? "" : "opacity-50"}>
                   <Td className="font-bold">
@@ -1933,10 +1936,11 @@ function UsersTab({ branches }: { branches: Branch[] }) {
                     {self && <span className="ml-2 text-[11px] text-text-muted">(you)</span>}
                   </Td>
                   <Td>
-                    {self ? (
+                    {locked ? (
                       ROLE_LABEL[p.role] ?? p.role
                     ) : (
-                      <RoleSelect profile={p} branches={branches} onChanged={q.retry} />
+                      <RoleSelect profile={p} branches={branches}
+                        allowOwner={profile.role !== "admin"} onChanged={q.retry} />
                     )}
                   </Td>
                   <Td>
@@ -1948,7 +1952,7 @@ function UsersTab({ branches }: { branches: Branch[] }) {
                   </Td>
                   <Td>{p.active ? "Active" : <span className="text-text-muted">Deactivated</span>}</Td>
                   <Td align="right">
-                    {!self && <ProfileToggle profile={p} onChanged={q.retry} />}
+                    {!locked && <ProfileToggle profile={p} onChanged={q.retry} />}
                   </Td>
                 </tr>
               );
@@ -1960,9 +1964,10 @@ function UsersTab({ branches }: { branches: Branch[] }) {
   );
 }
 
-function RoleSelect({ profile, branches, onChanged }: {
+function RoleSelect({ profile, branches, allowOwner, onChanged }: {
   profile: ProfileRow;
   branches: Branch[];
+  allowOwner: boolean;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1989,7 +1994,7 @@ function RoleSelect({ profile, branches, onChanged }: {
         onChanged();
       }}
     >
-      <option value="owner">Owner</option>
+      {allowOwner && <option value="owner">Owner</option>}
       <option value="admin">Admin</option>
       <option value="manager">Branch manager</option>
       <option value="front_desk">Front desk</option>

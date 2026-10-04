@@ -52,15 +52,15 @@ interface MatrixRow {
 }
 
 export default function ComparePage() {
-  const { canSeeAnalytics, isOwner, businessId, business, businesses } = useSession();
+  const { canSeeAnalytics, isAdminUp, businessId, business, businesses } = useSession();
   const [period, setPeriod] = useState<Period>(periodPreset("month"));
   const { from, to } = period;
 
   if (!canSeeAnalytics) {
     return <EmptyState message="Branch comparison is available to the owner and branch managers." />;
   }
-  if (!isOwner) {
-    return <EmptyState message="Branch comparison spans both branches, so it is an owner view." />;
+  if (!isAdminUp) {
+    return <EmptyState message="Branch comparison spans both branches, so it is an owner or admin view." />;
   }
 
   return (

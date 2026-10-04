@@ -513,16 +513,16 @@ interface Divergence {
 }
 
 function PriceDivergenceTile() {
-  const { isOwner, businessId } = useSession();
+  const { isAdminUp, businessId } = useSession();
   const q = useQuery(async () => {
-    // Only the owner can ever see this tile — nobody else should pay for
-    // the RPC on every dashboard load.
-    if (!isOwner) return [] as Divergence[];
+    // Only owner and admin ever see this tile — nobody else should pay
+    // for the RPC on every dashboard load.
+    if (!isAdminUp) return [] as Divergence[];
     const res = await createClient().rpc("f_price_divergence", { p_business: businessId });
     return unwrap(res) as Divergence[];
-  }, [businessId, isOwner]);
+  }, [businessId, isAdminUp]);
 
-  if (!isOwner || q.status !== "ready" || q.data.length === 0) return null;
+  if (!isAdminUp || q.status !== "ready" || q.data.length === 0) return null;
 
   return (
     <Card title="Branch prices diverge">
