@@ -16,6 +16,7 @@ import { useSession } from "@/components/session-context";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
 import { DateInput } from "@/components/date-input";
+import { useBranchScope } from "@/components/branch-scope";
 import type { Client, Service, ServiceType } from "@/lib/types";
 import {
   Button, Card, ErrorState, Field, Input, Modal, Select,
@@ -89,9 +90,8 @@ const SLOTS = Array.from({ length: (18 - 8) * (60 / SLOT_MIN) }, (_, i) => {
 });
 
 export default function BookingsPage() {
-  const { branches, branchId } = useSession();
   const router = useRouter();
-  const [branch, setBranch] = useState(branchId ?? branches[0]?.id ?? "");
+  const { branch, picker } = useBranchScope();
   const [date, setDate] = useState(todayISO());
   const [nonce, setNonce] = useState(0);
   const [formOpen, setFormOpen] = useState<null | {
@@ -139,14 +139,7 @@ export default function BookingsPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Bookings</h1>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {branches.length > 1 && (
-            <Select value={branch} className="w-36" aria-label="Branch"
-              onChange={(e) => setBranch(e.target.value)}>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </Select>
-          )}
+          {picker}
           <div className="flex items-center rounded-[4px] border border-border">
             <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
               onClick={() => setDate(addDays(date, -1))}>←</button>
@@ -970,7 +963,9 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
   const [bookDate, setBookDate] = useState(date);
   const [time, setTime] = useState("10:00");
   const [lines, setLines] = useState<SvcDraft[]>([{ key: nextKey(), service_id: "", durationInput: "" }]);
-  const [techId, setTechId] = useState("");
+  // One preferred technician per section: a request can span Hair and
+  // Nails & Foot, and those are different people.
+  const [techByBucket, setTechByBucket] = useState({ hair: "", nail_foot: "" });
   const [depositInput, setDepositInput] = useState("");
   const [depositMethod, setDepositMethod] = useState("gcash");
   const [depositRef, setDepositRef] = useState("");
@@ -992,7 +987,10 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
       setLines(source.booking_services.map((s) => ({
         key: nextKey(), service_id: s.service_id, durationInput: String(s.duration_min),
       })));
-      setTechId(source.technician_id ?? "");
+      setTechByBucket({
+        hair: source.bucket === "hair" ? source.technician_id ?? "" : "",
+        nail_foot: source.bucket === "nail_foot" ? source.technician_id ?? "" : "",
+      });
       setDepositInput(source.deposit_cents != null ? String(source.deposit_cents / 100) : "");
       setDepositMethod(source.deposit_method ?? "gcash");
       setDepositRef(source.deposit_reference ?? "");
@@ -1007,7 +1005,13 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
       setBookDate(date);
       setTime(state?.slot ?? "10:00");
       setLines([{ key: nextKey(), service_id: "", durationInput: "" }]);
-      setTechId(state?.tech ?? "");
+      // A tapped technician row pre-fills that technician in their section.
+      const preTech = state?.tech ?? "";
+      const preBucket = capacity.find((c) => c.technician_ids.includes(preTech))?.bucket;
+      setTechByBucket({
+        hair: preBucket === "hair" ? preTech : "",
+        nail_foot: preBucket === "nail_foot" ? preTech : "",
+      });
       setDepositInput(""); setDepositMethod("gcash"); setDepositRef("");
       setNote("");
     }
@@ -1036,20 +1040,30 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
     return () => { alive = false; clearTimeout(handle); };
   }, [clientSearch, selected, open]);
 
-  const totalMinutes = lines.reduce((sum, l) => {
+  const minutesOf = (ls: SvcDraft[]) => ls.reduce((sum, l) => {
     const svc = services.find((s) => s.id === l.service_id);
     const d = l.durationInput !== "" ? Number(l.durationInput)
       : (svc?.default_duration_min ?? 0);
     return sum + (Number.isFinite(d) ? d : 0);
   }, 0);
 
-  const bucket = (() => {
-    const first = services.find((s) => s.id === lines[0]?.service_id);
-    if (!first || refQ.status !== "ready" || !refQ.data) return null;
-    const type = refQ.data.types.find((t) => t.id === first.service_type_id);
+  const bucketOf = (serviceId: string): "hair" | "nail_foot" => {
+    const svc = services.find((s) => s.id === serviceId);
+    const type = refQ.status === "ready" && refQ.data
+      ? refQ.data.types.find((t) => t.id === svc?.service_type_id)
+      : null;
     return type?.name === "Nail & Foot" ? "nail_foot" : "hair";
-  })();
-  const bucketTechs = capacity.find((c) => c.bucket === (bucket ?? "hair"));
+  };
+
+  // Lines grouped by section. A request that spans Hair and Nails & Foot
+  // is saved as one hold per section at the same start time, so each
+  // section's capacity is held where the work actually happens.
+  const groups = (["hair", "nail_foot"] as const)
+    .map((b) => ({
+      bucket: b,
+      lines: lines.filter((l) => l.service_id !== "" && bucketOf(l.service_id) === b),
+    }))
+    .filter((g) => g.lines.length > 0);
 
   async function submit() {
     setError(null);
@@ -1070,50 +1084,80 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
       setError("The deposit must be a peso amount, or blank.");
       return;
     }
+    // Editing or moving an existing booking keeps single-section
+    // semantics: its row on the calendar is one hold in one section.
+    if ((editing || moving) && groups.length > 1) {
+      setError("An existing booking stays in its own section. Book the other section's services as a separate booking.");
+      return;
+    }
     setBusy(true);
-    const payload = {
-      branch_id: branch,
-      client: selected
-        ? { id: selected.id }
-        : newPhone.trim() !== ""
-          ? { phone: newPhone.trim(), full_name: newName.trim() || undefined }
-          : { phone_declined: true, full_name: newName.trim() || undefined },
-      booking_date: bookDate,
-      starts_at: time,
-      technician_id: techId || undefined,
-      deposit_cents: deposit ?? undefined,
-      deposit_method: deposit != null ? depositMethod : undefined,
-      deposit_reference: depositRef.trim() || undefined,
-      note: note.trim() || undefined,
-      services: lines.map((l) => ({
-        service_id: l.service_id,
-        duration_min: l.durationInput !== "" ? Number(l.durationInput) : undefined,
-      })),
-    };
     const supabase = createClient();
-    const { data: rpcData, error: err } = moving
-      ? await supabase.rpc("move_booking", { p_original: moving.id, p_payload: payload })
-      : await supabase.rpc("save_booking", {
-          p_payload: payload,
-          ...(editing ? { p_booking: editing.id } : {}),
-        });
-    if (!err && state?.inquiry) {
+    let client: Record<string, unknown> = selected
+      ? { id: selected.id }
+      : newPhone.trim() !== ""
+        ? { phone: newPhone.trim(), full_name: newName.trim() || undefined }
+        : { phone_declined: true, full_name: newName.trim() || undefined };
+    const made: string[] = [];
+    let firstBookingId: string | undefined;
+    for (const [i, g] of groups.entries()) {
+      const payload = {
+        branch_id: branch,
+        client,
+        booking_date: bookDate,
+        starts_at: time,
+        technician_id: techByBucket[g.bucket] || undefined,
+        // The deposit is one payment: it rides on the first hold only.
+        deposit_cents: i === 0 ? deposit ?? undefined : undefined,
+        deposit_method: i === 0 && deposit != null ? depositMethod : undefined,
+        deposit_reference: i === 0 ? depositRef.trim() || undefined : undefined,
+        note: note.trim() || undefined,
+        services: g.lines.map((l) => ({
+          service_id: l.service_id,
+          duration_min: l.durationInput !== "" ? Number(l.durationInput) : undefined,
+        })),
+      };
+      const { data: rpcData, error: err } = moving
+        ? await supabase.rpc("move_booking", { p_original: moving.id, p_payload: payload })
+        : await supabase.rpc("save_booking", {
+            p_payload: payload,
+            ...(editing ? { p_booking: editing.id } : {}),
+          });
+      if (err) {
+        // All or nothing: cancel the holds already made so a half-booked
+        // request never stands.
+        for (const id of made) {
+          await supabase.rpc("set_booking_status", { p_booking: id, p_status: "cancelled" });
+        }
+        setBusy(false);
+        const reason = /full|booked in this window/i.test(err.message)
+          ? err.message.replace(/^.*?:\s*/, "")
+          : /horizon/i.test(err.message) || /past/i.test(err.message)
+            ? err.message
+            : "The booking was not saved. Check the fields and try again.";
+        setError(made.length > 0 ? `${reason} Nothing was booked.` : reason);
+        return;
+      }
+      const newId = (rpcData as { booking_id?: string } | null)?.booking_id;
+      if (newId) {
+        made.push(newId);
+        firstBookingId ??= newId;
+        // A second hold must reuse the first one's client record — a
+        // fresh walk-in payload would create a duplicate client.
+        if (i === 0 && groups.length > 1 && !selected) {
+          const { data: created } = await supabase
+            .from("bookings").select("client_id").eq("id", newId).single();
+          if (created?.client_id) client = { id: created.client_id };
+        }
+      }
+    }
+    if (state?.inquiry) {
       // The inquiry that started this booking converts: funnel data.
-      const bookingIdNew = (rpcData as { booking_id?: string } | null)?.booking_id;
       await supabase
         .from("inquiries")
-        .update({ status: "booked", ...(bookingIdNew ? { booking_id: bookingIdNew } : {}) })
+        .update({ status: "booked", ...(firstBookingId ? { booking_id: firstBookingId } : {}) })
         .eq("id", state.inquiry.id);
     }
     setBusy(false);
-    if (err) {
-      setError(/full|booked in this window/i.test(err.message)
-        ? err.message.replace(/^.*?:\s*/, "")
-        : /horizon/i.test(err.message) || /past/i.test(err.message)
-          ? err.message
-          : "The booking was not saved. Check the fields and try again.");
-      return;
-    }
     onDone();
   }
 
@@ -1227,24 +1271,35 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
               ))}
             </Select>
           </Field>
-          <Field label="Preferred technician" hint="Optional">
-            <Select value={techId} className="w-44"
-              onChange={(e) => setTechId(e.target.value)}>
-              <option value="">Any available</option>
-              {/* A row-tap prefill can outrun the bucket (no service picked
-                  yet) — keep the name visible instead of a blank select. */}
-              {techId !== "" && !(bucketTechs?.technician_ids ?? []).includes(techId) && (
-                <option value={techId}>
-                  {capacity
-                    .flatMap((c) => c.technician_ids.map((id, i) => [id, c.technician_names[i]] as const))
-                    .find(([id]) => id === techId)?.[1] ?? "Selected technician"}
-                </option>
-              )}
-              {(bucketTechs?.technician_ids ?? []).map((id, i) => (
-                <option key={id} value={id}>{bucketTechs?.technician_names[i]}</option>
-              ))}
-            </Select>
-          </Field>
+          {/* One preferred-technician select per section in the request:
+              a Hair + Nails & Foot visit involves two different people. */}
+          {groups.map((g) => {
+            const cap = capacity.find((c) => c.bucket === g.bucket);
+            const val = techByBucket[g.bucket];
+            return (
+              <Field key={g.bucket}
+                label={`${g.bucket === "hair" ? "Hair" : "Nails & Foot"} technician`}
+                hint="Optional">
+                <Select value={val} className="w-44"
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setTechByBucket((t) => ({ ...t, [g.bucket]: id }));
+                  }}>
+                  <option value="">Any available</option>
+                  {val !== "" && !(cap?.technician_ids ?? []).includes(val) && (
+                    <option value={val}>
+                      {capacity
+                        .flatMap((c) => c.technician_ids.map((id, i) => [id, c.technician_names[i]] as const))
+                        .find(([id]) => id === val)?.[1] ?? "Selected technician"}
+                    </option>
+                  )}
+                  {(cap?.technician_ids ?? []).map((id, i) => (
+                    <option key={id} value={id}>{cap?.technician_names[i]}</option>
+                  ))}
+                </Select>
+              </Field>
+            );
+          })}
         </div>
 
         <div className="flex flex-wrap gap-4">
@@ -1277,8 +1332,12 @@ function BookingModal({ state, branch, date, capacity, onClose, onDone }: {
         </Field>
 
         <p className="text-[11px] text-text-muted">
-          {totalMinutes > 0 ? `About ${totalMinutes} minutes` : ""}
-          {bucket ? ` · ${bucket === "nail_foot" ? "Nails & Foot" : "Hair"} slot` : ""}
+          {groups
+            .map((g) => `${g.bucket === "hair" ? "Hair" : "Nails & Foot"} ~${minutesOf(g.lines)} min`)
+            .join(" · ")}
+          {groups.length > 1
+            ? " — booked as one hold per section, starting together"
+            : ""}
         </p>
         {error && <p className="text-[11px] text-brand-red">{error}</p>}
         <div className="flex justify-end gap-2">

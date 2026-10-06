@@ -13,6 +13,7 @@ import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, parsePesos } from "@/lib/money";
 import { fmtDate } from "@/lib/dates";
 import { DateInput } from "@/components/date-input";
+import { useBranchScope } from "@/components/branch-scope";
 import type { Branch, Service, ServiceType, Technician } from "@/lib/types";
 import {
   Button, Card, EmptyState, ErrorState, Field, Input, Modal, Select,
@@ -1121,8 +1122,7 @@ const COSTING_ACC: Record<string, (r: CostingComputed) => unknown> = {
 };
 
 function CostingTab({ branches }: { branches: Branch[] }) {
-  const { branchId } = useSession();
-  const [branch, setBranch] = useState(branchId ?? branches[0]?.id ?? "");
+  const { branch, picker } = useBranchScope();
   const [nonce, setNonce] = useState(0);
   const [recipeFor, setRecipeFor] = useState<CostingRow | null>(null);
   // What-if prices, keyed by service id; peso text as typed.
@@ -1195,16 +1195,7 @@ function CostingTab({ branches }: { branches: Branch[] }) {
     <div className="space-y-6">
       <Card title="Costing assumptions">
         <div className="mb-4 flex flex-wrap items-end gap-4">
-          {branches.length > 1 && (
-            <Field label="Branch">
-              <Select value={branch} className="w-40"
-                onChange={(e) => setBranch(e.target.value)}>
-                {branches.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </Select>
-            </Field>
-          )}
+          {picker && <Field label="Branch">{picker}</Field>}
           {q.status === "ready" && (
             <AssumptionsEditor
               key={branch}

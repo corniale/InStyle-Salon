@@ -8,10 +8,11 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
+import { useBranchScope } from "@/components/branch-scope";
 import { useQuery, unwrap } from "@/lib/use-query";
 import { fmtDate, fmtMonthDay } from "@/lib/dates";
 import {
-  Button, Card, EmptyState, ErrorState, Field, Select, SkeletonRows,
+  Button, Card, EmptyState, ErrorState, SkeletonRows,
   Table, Td, Th, Truncate,
 } from "@/components/ui";
 
@@ -54,8 +55,8 @@ function addDays(iso: string, n: number): string {
 }
 
 export default function SchedulePage() {
-  const { branches, branchId, isOwner } = useSession();
-  const [branch, setBranch] = useState(branchId ?? branches[0]?.id ?? "");
+  const { isOwner } = useSession();
+  const { branch, picker } = useBranchScope();
   const [weekStart, setWeekStart] = useState(mondayOf(todayISO()));
   const [nonce, setNonce] = useState(0);
 
@@ -201,14 +202,7 @@ export default function SchedulePage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Weekly schedule</h1>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {branches.length > 1 && (
-            <Select value={branch} className="w-36" aria-label="Branch"
-              onChange={(e) => setBranch(e.target.value)}>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </Select>
-          )}
+          {picker}
           <div className="flex items-center rounded-[4px] border border-border">
             <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
               onClick={() => setWeekStart(addDays(weekStart, -7))}>←</button>

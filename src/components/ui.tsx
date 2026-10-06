@@ -334,8 +334,11 @@ export function Modal({ title, open, onClose, children }: {
       aria-modal="true"
       aria-label={title}
     >
+      {/* Capped to the viewport and scrollable inside: a form may grow
+          (service lines, validation errors) but its buttons must never
+          leave reach. */}
       <div
-        className="w-full max-w-lg rounded-[4px] border border-border bg-surface-card p-4 shadow-overlay"
+        className="max-h-[85dvh] w-full max-w-lg overflow-y-auto overscroll-contain rounded-[4px] border border-border bg-surface-card p-4 shadow-overlay"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-4 text-[15px] font-bold">{title}</h2>
