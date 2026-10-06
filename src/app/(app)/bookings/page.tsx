@@ -9,7 +9,7 @@
 // (save_booking); this page shows conflicts before they happen and
 // surfaces the server's refusal when two tablets race.
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useSession } from "@/components/session-context";
@@ -18,9 +18,10 @@ import { formatCentavos, parsePesos } from "@/lib/money";
 import { DateInput } from "@/components/date-input";
 import { useBranchScope } from "@/components/branch-scope";
 import type { Client, Service, ServiceType } from "@/lib/types";
+import { fmtDate } from "@/lib/dates";
 import {
   Button, Card, ErrorState, Field, Input, Modal, Select,
-  SkeletonRows, Truncate,
+  SkeletonRows, Table, Td, Th, Truncate,
 } from "@/components/ui";
 
 interface BookingRow {
@@ -89,11 +90,23 @@ const SLOTS = Array.from({ length: (18 - 8) * (60 / SLOT_MIN) }, (_, i) => {
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 });
 
+const BOOKING_SELECT = "id, booking_date, starts_at, ends_at, bucket, technician_id, status, deposit_cents, deposit_method, deposit_reference, note, ticket_id, clients(id, full_name, phone, phone_declined), booking_services(service_id, duration_min, services(name))";
+
 export default function BookingsPage() {
   const router = useRouter();
   const { branch, picker } = useBranchScope();
   const [date, setDate] = useState(todayISO());
   const [nonce, setNonce] = useState(0);
+  // Calendar for the day's shape; list for finding a name and reading
+  // details. Remembered per device.
+  const [view, setView] = useState<"grid" | "list">("grid");
+  useEffect(() => {
+    try { if (localStorage.getItem("bookings-view") === "list") setView("list"); } catch {}
+  }, []);
+  function switchView(v: "grid" | "list") {
+    setView(v);
+    try { localStorage.setItem("bookings-view", v); } catch { /* per-device nicety only */ }
+  }
   const [formOpen, setFormOpen] = useState<null | {
     edit?: BookingRow;
     move?: BookingRow;
@@ -107,7 +120,7 @@ export default function BookingsPage() {
     const [bookings, capacity] = await Promise.all([
       supabase
         .from("bookings")
-        .select("id, booking_date, starts_at, ends_at, bucket, technician_id, status, deposit_cents, deposit_method, deposit_reference, note, ticket_id, clients(id, full_name, phone, phone_declined), booking_services(service_id, duration_min, services(name))")
+        .select(BOOKING_SELECT)
         .eq("branch_id", branch)
         .eq("booking_date", date)
         .order("starts_at"),
@@ -134,11 +147,31 @@ export default function BookingsPage() {
     return n.getHours() * 60 + n.getMinutes();
   })();
 
+  async function statusAction(b: BookingRow, status: string) {
+    const { error } = await createClient()
+      .rpc("set_booking_status", { p_booking: b.id, p_status: status });
+    if (!error && status === "arrived") {
+      router.push(`/tickets/new?booking=${b.id}`);
+      return;
+    }
+    refresh();
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Bookings</h1>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <div className="flex rounded-[4px] border border-border">
+            {([["grid", "Calendar"], ["list", "List"]] as const).map(([k, label]) => (
+              <button key={k} onClick={() => switchView(k)}
+                className={`h-8 px-3 text-[13px] ${
+                  view === k ? "bg-ink font-bold text-white" : "hover:bg-surface-page"
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
           {picker}
           <div className="flex items-center rounded-[4px] border border-border">
             <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
@@ -166,11 +199,24 @@ export default function BookingsPage() {
       <InquiriesCard branch={branch} nonce={nonce} onChanged={refresh}
         onConvert={(inq) => setFormOpen({ inquiry: inq })} />
 
-      {q.status === "loading" && <Card><SkeletonRows rows={10} cols={4} /></Card>}
-      {q.status === "error" && (
+      {view === "list" && (
+        <BookingListCard
+          branch={branch}
+          date={date}
+          nonce={nonce}
+          onEdit={(b) => setFormOpen({ edit: b })}
+          onMove={(b) => setFormOpen({ move: b })}
+          onStatus={statusAction}
+        />
+      )}
+
+      {view === "grid" && q.status === "loading" && (
+        <Card><SkeletonRows rows={10} cols={4} /></Card>
+      )}
+      {view === "grid" && q.status === "error" && (
         <Card><ErrorState message="Bookings did not load." onRetry={q.retry} /></Card>
       )}
-      {q.status === "ready" && (
+      {view === "grid" && q.status === "ready" && (
         <>
           {!q.data.capacity.some((c) => c.approved) && (
             <p className="text-[11px] text-brand-red">
@@ -194,15 +240,7 @@ export default function BookingsPage() {
                   onSlot={(slot, tech) => setFormOpen({ slot, tech })}
                   onEdit={(b) => setFormOpen({ edit: b })}
                   onMove={(b) => setFormOpen({ move: b })}
-                  onStatus={async (b, status) => {
-                    const { error } = await createClient()
-                      .rpc("set_booking_status", { p_booking: b.id, p_status: status });
-                    if (!error && status === "arrived") {
-                      router.push(`/tickets/new?booking=${b.id}`);
-                      return;
-                    }
-                    refresh();
-                  }}
+                  onStatus={statusAction}
                 />
               );
             })}
@@ -574,47 +612,7 @@ function SelectedBookingBar({ b, techNames, onEdit, onMove, onStatus }: {
         {b.note ? ` · ${b.note}` : ""}
       </div>
       <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
-        {b.status === "booked" && (
-          <button className="hover:underline" onClick={() => onStatus(b, "confirmed")}>
-            Confirm
-          </button>
-        )}
-        {(b.status === "booked" || b.status === "confirmed") && (
-          <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
-            Arrived → ticket
-          </button>
-        )}
-        {b.status === "arrived" && !b.ticket_id && (
-          <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
-            Open ticket
-          </button>
-        )}
-        {/* Mistake-proofing: every stage before billed steps back one, so
-            a wrong tap never strands a booking. */}
-        {b.status === "confirmed" && (
-          <button className="hover:underline" onClick={() => onStatus(b, "booked")}>
-            Back to booked
-          </button>
-        )}
-        {b.status === "arrived" && (
-          <button className="hover:underline" onClick={() => onStatus(b, "confirmed")}>
-            Undo arrived
-          </button>
-        )}
-        {(b.status === "booked" || b.status === "confirmed") && (
-          <>
-            <button className="hover:underline" onClick={() => onEdit(b)}>Edit</button>
-            <button className="hover:underline" onClick={() => onMove(b)}>Move</button>
-            <button className="text-brand-red hover:underline"
-              onClick={() => onStatus(b, "no_show")}>
-              No-show
-            </button>
-            <button className="text-brand-red hover:underline"
-              onClick={() => onStatus(b, "cancelled")}>
-              Cancel
-            </button>
-          </>
-        )}
+        <BookingActionLinks b={b} onEdit={onEdit} onMove={onMove} onStatus={onStatus} />
         {b.status === "billed" && (
           <span className="text-text-muted">
             Billed — final. To reverse the sale, void its ticket on the Tickets page.
@@ -622,6 +620,250 @@ function SelectedBookingBar({ b, techNames, onEdit, onMove, onStatus }: {
         )}
       </div>
     </div>
+  );
+}
+
+/** The one set of stage actions, shared by the calendar's action bar and
+    the list view — so the two views can never drift apart. */
+function BookingActionLinks({ b, onEdit, onMove, onStatus }: {
+  b: BookingRow;
+  onEdit: (b: BookingRow) => void;
+  onMove: (b: BookingRow) => void;
+  onStatus: (b: BookingRow, status: string) => void;
+}) {
+  return (
+    <>
+      {b.status === "booked" && (
+        <button className="hover:underline" onClick={() => onStatus(b, "confirmed")}>
+          Confirm
+        </button>
+      )}
+      {(b.status === "booked" || b.status === "confirmed") && (
+        <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
+          Arrived → ticket
+        </button>
+      )}
+      {b.status === "arrived" && !b.ticket_id && (
+        <button className="font-bold hover:underline" onClick={() => onStatus(b, "arrived")}>
+          Open ticket
+        </button>
+      )}
+      {/* Mistake-proofing: every stage before billed steps back one, so
+          a wrong tap never strands a booking. */}
+      {b.status === "confirmed" && (
+        <button className="hover:underline" onClick={() => onStatus(b, "booked")}>
+          Back to booked
+        </button>
+      )}
+      {b.status === "arrived" && (
+        <button className="hover:underline" onClick={() => onStatus(b, "confirmed")}>
+          Undo arrived
+        </button>
+      )}
+      {(b.status === "booked" || b.status === "confirmed") && (
+        <>
+          <button className="hover:underline" onClick={() => onEdit(b)}>Edit</button>
+          <button className="hover:underline" onClick={() => onMove(b)}>Move</button>
+          <button className="text-brand-red hover:underline"
+            onClick={() => onStatus(b, "no_show")}>
+            No-show
+          </button>
+          <button className="text-brand-red hover:underline"
+            onClick={() => onStatus(b, "cancelled")}>
+            Cancel
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// List view: the selected date through the booking horizon as a
+// searchable queue — names, phones, deposits and statuses side by side,
+// which the calendar cannot show at once.
+// ---------------------------------------------------------------------------
+
+const LIST_SCOPES = [
+  ["active", "Active"], ["all", "All"], ["billed", "Billed"],
+  ["closed", "Cancelled / no-show / moved"],
+] as const;
+
+function BookingListCard({ branch, date, nonce, onEdit, onMove, onStatus }: {
+  branch: string;
+  date: string;
+  nonce: number;
+  onEdit: (b: BookingRow) => void;
+  onMove: (b: BookingRow) => void;
+  onStatus: (b: BookingRow, status: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [scope, setScope] = useState<(typeof LIST_SCOPES)[number][0]>("active");
+  const to = addDays(date, 14);
+
+  const q = useQuery(async () => {
+    const supabase = createClient();
+    const [bookings, techs] = await Promise.all([
+      supabase.from("bookings").select(BOOKING_SELECT)
+        .eq("branch_id", branch)
+        .gte("booking_date", date)
+        .lte("booking_date", to)
+        .order("booking_date").order("starts_at"),
+      supabase.from("technicians").select("id, full_name").eq("branch_id", branch),
+    ]);
+    return {
+      bookings: unwrap(bookings) as unknown as BookingRow[],
+      names: new Map((unwrap(techs) as { id: string; full_name: string }[])
+        .map((t) => [t.id, t.full_name] as const)),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branch, date, nonce]);
+
+  const nowM = (() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); })();
+  const today = todayISO();
+
+  const term = search.trim().toLowerCase();
+  const names = q.status === "ready" ? q.data.names : new Map<string, string>();
+  const rows = (q.status === "ready" ? q.data.bookings : []).filter((b) => {
+    if (scope === "active" && !ACTIVE.has(b.status)) return false;
+    if (scope === "billed" && b.status !== "billed") return false;
+    if (scope === "closed"
+        && b.status !== "moved" && b.status !== "cancelled" && b.status !== "no_show") {
+      return false;
+    }
+    if (term === "") return true;
+    const hay = [
+      clientLabel(b),
+      b.clients?.phone ?? "",
+      ...b.booking_services.map((s) => s.services?.name ?? ""),
+      b.technician_id ? names.get(b.technician_id) ?? "" : "",
+    ].join(" ").toLowerCase();
+    return hay.includes(term);
+  });
+
+  return (
+    <Card title="Booking list">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Input value={search} className="w-56"
+          placeholder="Search name, phone, service"
+          aria-label="Search bookings"
+          onChange={(e) => setSearch(e.target.value)} />
+        <Select value={scope} className="w-48" aria-label="Status filter"
+          onChange={(e) => setScope(e.target.value as typeof scope)}>
+          {LIST_SCOPES.map(([k, label]) => (
+            <option key={k} value={k}>{label}</option>
+          ))}
+        </Select>
+        <span className="ml-auto text-[11px] text-text-muted tnum">
+          {fmtDate(date)} – {fmtDate(to)}
+        </span>
+      </div>
+
+      {q.status === "loading" && <SkeletonRows rows={8} cols={6} />}
+      {q.status === "error" && (
+        <ErrorState message="Bookings did not load." onRetry={q.retry} />
+      )}
+      {q.status === "ready" && rows.length === 0 && (
+        <p className="text-[13px] text-text-muted">
+          {term !== ""
+            ? "Nothing matches the search in this window."
+            : "No bookings in this window."}
+        </p>
+      )}
+      {q.status === "ready" && rows.length > 0 && (
+        <Table>
+          <thead>
+            <tr>
+              <Th>Time</Th>
+              <Th>Client</Th>
+              <Th>Phone</Th>
+              <Th>Services</Th>
+              <Th>Section</Th>
+              <Th>Technician</Th>
+              <Th align="right">Min</Th>
+              <Th align="right">Deposit</Th>
+              <Th>Status</Th>
+              <Th>Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((b, i) => {
+              const newDay = i === 0 || rows[i - 1].booking_date !== b.booking_date;
+              const late = b.booking_date === today
+                && (b.status === "booked" || b.status === "confirmed")
+                && nowM > mins(b.starts_at) + 15;
+              return (
+                <Fragment key={b.id}>
+                  {newDay && (
+                    <tr>
+                      <Td colSpan={10}
+                        className="bg-surface-page text-[11px] font-bold uppercase tracking-wide text-text-muted">
+                        {new Date(`${b.booking_date}T12:00:00`)
+                          .toLocaleDateString("en-US", { weekday: "long" })}
+                        {" · "}{fmtDate(b.booking_date)}
+                        {b.booking_date === today ? " — today" : ""}
+                      </Td>
+                    </tr>
+                  )}
+                  <tr className={ACTIVE.has(b.status) ? "" : "opacity-60"}>
+                    <Td className="whitespace-nowrap tnum">{fmtTime(b.starts_at)}</Td>
+                    <Td className="font-bold">
+                      <Truncate text={clientLabel(b)} max={22} />
+                    </Td>
+                    <Td className="tnum">
+                      {b.clients?.phone_declined ? "—" : b.clients?.phone ?? "—"}
+                    </Td>
+                    <Td title={b.note ?? undefined}>
+                      <Truncate
+                        text={b.booking_services.map((s) => s.services?.name ?? "?").join(", ")}
+                        max={36}
+                      />
+                      {b.note && <span className="ml-1 text-[11px] text-text-muted">✎</span>}
+                    </Td>
+                    <Td>{b.bucket === "hair" ? "Hair" : "Nails & Foot"}</Td>
+                    <Td>
+                      {b.technician_id
+                        ? <Truncate text={names.get(b.technician_id) ?? "named"} max={16} />
+                        : <span className="text-text-muted">any</span>}
+                    </Td>
+                    <Td align="right" className="tnum">
+                      {mins(b.ends_at) - mins(b.starts_at)}
+                    </Td>
+                    <Td align="right" className="tnum">
+                      {b.deposit_cents != null && b.deposit_cents > 0
+                        ? formatCentavos(b.deposit_cents)
+                        : "—"}
+                    </Td>
+                    <Td>
+                      {STATUS_LABEL[b.status]}
+                      {late && (
+                        <span className="ml-1 rounded-[4px] bg-brand-red-tint px-1 text-[10px] font-bold text-brand-red-deep">
+                          LATE
+                        </span>
+                      )}
+                    </Td>
+                    <Td>
+                      <div className="flex flex-wrap gap-2 text-[11px]">
+                        <BookingActionLinks b={b}
+                          onEdit={onEdit} onMove={onMove} onStatus={onStatus} />
+                      </div>
+                    </Td>
+                  </tr>
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </Table>
+      )}
+      {q.status === "ready" && (
+        <p className="mt-2 text-[11px] text-text-muted">
+          Covers the selected date through the 14-day booking horizon. A ✎
+          marks a booking with a note — hover the services to read it.
+          Cancelled and no-show bookings can be reinstated from the calendar
+          view.
+        </p>
+      )}
+    </Card>
   );
 }
 
