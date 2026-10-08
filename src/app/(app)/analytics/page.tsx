@@ -35,7 +35,7 @@ export default function AnalyticsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Analytics</h1>
-        <PeriodPicker value={period} onChange={setPeriod} withRange />
+        <PeriodPicker value={period} onChange={setPeriod} />
       </div>
       <p className="-mt-4 text-[11px] text-text-muted">
         The range filters retention, the booking funnel, peak periods and the

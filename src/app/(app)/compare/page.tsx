@@ -70,7 +70,7 @@ export default function ComparePage() {
           Branch comparison
           {businesses.length > 1 && business ? ` — ${business.name}` : ""}
         </h1>
-        <PeriodPicker value={period} onChange={setPeriod} withRange />
+        <PeriodPicker value={period} onChange={setPeriod} />
       </div>
 
       {/* Scoped to one business on purpose: a spa vs a barbershop row would

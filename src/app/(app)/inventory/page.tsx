@@ -17,6 +17,7 @@ import {
 import { csvPesos, downloadCsv } from "@/lib/csv";
 import { fmtDate } from "@/lib/dates";
 import { DateInput } from "@/components/date-input";
+import { ALL_TIME, PeriodPicker, type Period } from "@/components/period-picker";
 import { Pagination } from "@/components/client-bits";
 
 interface ProductOpt {
@@ -339,8 +340,11 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
 }) {
   const [productFilter, setProductFilter] = useState("");
   const [kindFilter, setKindFilter] = useState("");
+  // An audit ledger: all time by default, narrowed on demand.
+  const [period, setPeriod] = useState<Period>(ALL_TIME);
+  const { from, to } = period;
   const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [shownKey, productFilter, kindFilter]);
+  useEffect(() => { setPage(0); }, [shownKey, productFilter, kindFilter, from, to]);
 
   const q = useQuery(async () => {
     let query = createClient()
@@ -352,10 +356,12 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
       .range(page * ACTIVITY_PAGE, page * ACTIVITY_PAGE + ACTIVITY_PAGE - 1);
     if (productFilter) query = query.eq("product_id", productFilter);
     if (kindFilter) query = query.eq("kind", kindFilter);
+    if (from) query = query.gte("moved_on", from);
+    if (to) query = query.lte("moved_on", to);
     const res = await query;
     return { rows: unwrap(res) as ActivityRow[], total: res.count ?? 0 };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shownKey, productFilter, kindFilter, page, nonce]);
+  }, [shownKey, productFilter, kindFilter, from, to, page, nonce]);
 
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState(false);
@@ -377,12 +383,16 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
           .range(offset, offset + PAGE - 1);
         if (productFilter) query = query.eq("product_id", productFilter);
         if (kindFilter) query = query.eq("kind", kindFilter);
+        if (from) query = query.gte("moved_on", from);
+        if (to) query = query.lte("moved_on", to);
         const chunk = unwrap(await query) as ActivityRow[];
         all.push(...chunk);
         if (chunk.length < PAGE) break;
       }
       downloadCsv(
-        `inventory-activity.csv`,
+        from || to
+          ? `inventory-activity-${from || "start"}-to-${to || todayISO()}.csv`
+          : `inventory-activity.csv`,
         ["Date", "SKU", "Product", "Brand", "Size", "Unit", "Branch",
          "Movement", "Qty", "Unit cost", "Supplier", "Note"],
         all.map((r) => [
@@ -416,6 +426,7 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
             <option key={k} value={k}>{label}</option>
           ))}
         </Select>
+        <PeriodPicker value={period} onChange={setPeriod} withAll />
         <span className="ml-auto flex items-center gap-2">
           {exportError && (
             <span className="text-[11px] text-brand-red">Export failed — try again.</span>
@@ -435,7 +446,7 @@ function ActivityCard({ shownIds, shownKey, multiBranch, products, nonce, canExp
         <ErrorState message="The activity ledger did not load." onRetry={q.retry} />
       )}
       {q.status === "ready" && q.data.rows.length === 0 && (
-        <EmptyState message={productFilter || kindFilter
+        <EmptyState message={productFilter || kindFilter || from || to
           ? "No movements match these filters."
           : "No stock movements yet. Record the first delivery to begin."} />
       )}

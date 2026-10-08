@@ -173,20 +173,24 @@ export default function BookingsPage() {
             ))}
           </div>
           {picker}
-          <div className="flex items-center rounded-[4px] border border-border">
-            <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
-              onClick={() => setDate(addDays(date, -1))}>←</button>
-            <button
-              className={`h-8 px-2 text-[13px] ${date === todayISO() ? "font-bold" : "hover:bg-surface-page"}`}
-              onClick={() => setDate(todayISO())}
-            >
-              Today
-            </button>
-            <DateInput className="w-32 shrink-0" value={date}
-              onChange={setDate} aria-label="Booking date" />
-            <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
-              onClick={() => setDate(addDays(date, 1))}>→</button>
-          </div>
+          {/* The day pager drives the calendar; the list has its own
+              from/to, so List view shows one set of date controls. */}
+          {view === "grid" && (
+            <div className="flex items-center rounded-[4px] border border-border">
+              <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
+                onClick={() => setDate(addDays(date, -1))}>←</button>
+              <button
+                className={`h-8 px-2 text-[13px] ${date === todayISO() ? "font-bold" : "hover:bg-surface-page"}`}
+                onClick={() => setDate(todayISO())}
+              >
+                Today
+              </button>
+              <DateInput className="w-32 shrink-0" value={date}
+                onChange={setDate} aria-label="Booking date" />
+              <button className="h-8 px-3 text-[13px] hover:bg-surface-page"
+                onClick={() => setDate(addDays(date, 1))}>→</button>
+            </div>
+          )}
           <Button variant="primary" onClick={() => setFormOpen({})}>
             New booking
           </Button>
@@ -699,14 +703,17 @@ function BookingListCard({ branch, date, nonce, onEdit, onMove, onStatus }: {
 }) {
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState<(typeof LIST_SCOPES)[number][0]>("active");
-  const to = addDays(date, 14);
+  // Defaults to the calendar's day through the 14-day booking horizon;
+  // any range works, past ones included (e.g. last month's no-shows).
+  const [from, setFrom] = useState(date);
+  const [to, setTo] = useState(addDays(date, 14));
 
   const q = useQuery(async () => {
     const supabase = createClient();
     const [bookings, techs] = await Promise.all([
       supabase.from("bookings").select(BOOKING_SELECT)
         .eq("branch_id", branch)
-        .gte("booking_date", date)
+        .gte("booking_date", from)
         .lte("booking_date", to)
         .order("booking_date").order("starts_at"),
       supabase.from("technicians").select("id, full_name").eq("branch_id", branch),
@@ -717,7 +724,7 @@ function BookingListCard({ branch, date, nonce, onEdit, onMove, onStatus }: {
         .map((t) => [t.id, t.full_name] as const)),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [branch, date, nonce]);
+  }, [branch, from, to, nonce]);
 
   const nowM = (() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); })();
   const today = todayISO();
@@ -754,8 +761,16 @@ function BookingListCard({ branch, date, nonce, onEdit, onMove, onStatus }: {
             <option key={k} value={k}>{label}</option>
           ))}
         </Select>
-        <span className="ml-auto text-[11px] text-text-muted tnum">
-          {fmtDate(date)} – {fmtDate(to)}
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          <button className="h-8 rounded-[4px] border border-border px-3 text-[13px] hover:bg-surface-page"
+            onClick={() => { setFrom(todayISO()); setTo(addDays(todayISO(), 14)); }}>
+            Next 14 days
+          </button>
+          <DateInput className="w-36 shrink-0" value={from} aria-label="From"
+            onChange={(f) => { setFrom(f); if (to < f) setTo(f); }} />
+          <span className="text-[13px] text-text-muted">to</span>
+          <DateInput className="w-36 shrink-0" value={to} aria-label="To"
+            onChange={(t) => { setTo(t); if (from > t) setFrom(t); }} />
         </span>
       </div>
 
@@ -857,8 +872,9 @@ function BookingListCard({ branch, date, nonce, onEdit, onMove, onStatus }: {
       )}
       {q.status === "ready" && (
         <p className="mt-2 text-[11px] text-text-muted">
-          Covers the selected date through the 14-day booking horizon. A ✎
-          marks a booking with a note — hover the services to read it.
+          Any range works, past ones included — useful for reviewing last
+          month&apos;s no-shows. A ✎ marks a booking with a note — hover the
+          services to read it.
           Cancelled and no-show bookings can be reinstated from the calendar
           view.
         </p>

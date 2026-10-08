@@ -87,7 +87,7 @@ export default function TechniciansPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-[20px] font-bold">Technicians</h1>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <PeriodPicker value={period} onChange={setPeriod} withRange />
+          <PeriodPicker value={period} onChange={setPeriod} />
           {isAdminUp && (
             <Button disabled={q.status !== "ready" || q.data.length === 0} onClick={exportCsv}>
               Export CSV

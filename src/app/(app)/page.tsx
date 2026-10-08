@@ -14,7 +14,9 @@ import { useQuery, unwrap } from "@/lib/use-query";
 import { formatCentavos, formatCount, formatPct } from "@/lib/money";
 import { Button, Card, ErrorState, SkeletonRows, SkeletonStat, Stat } from "@/components/ui";
 import { BarList, LineChart } from "@/components/charts";
-import { PeriodPicker, periodPreset, type Period } from "@/components/period-picker";
+import {
+  PeriodPicker, monthStartISO, periodPreset, wholeMonth, type Period,
+} from "@/components/period-picker";
 import { csvPesos, downloadCsv } from "@/lib/csv";
 
 export default function DashboardPage() {
@@ -31,12 +33,18 @@ export default function DashboardPage() {
 
   const { kind, from, to } = period;
   // Pace against a monthly target only makes sense for a month: current
-  // (today / this month) or a past one. Year-to-date and single past days
-  // have no month-shaped target to pace against.
-  const showPace = kind === "today" || kind === "month" || kind === "pastmonth";
-  // The trend tile defaults to the last 30 days; a past month or the year
-  // to date pins it to that window instead.
-  const trendRange = kind === "pastmonth" || kind === "ytd";
+  // (today / this month), a past one, or a custom range that is exactly
+  // one calendar month. Year-to-date and other ranges have no month-shaped
+  // target to pace against.
+  const rangeMonth = kind === "range" ? wholeMonth(period) : null;
+  const paceMonth = kind === "pastmonth" ? from
+    : rangeMonth && rangeMonth !== monthStartISO() ? rangeMonth : null;
+  const showPace = kind === "today" || kind === "month" || kind === "pastmonth"
+    || rangeMonth != null;
+  // The trend tile defaults to the last 30 days; a past month, the year to
+  // date or any multi-day custom range pins it to that window instead.
+  const trendRange = kind === "pastmonth" || kind === "ytd"
+    || (kind === "range" && from !== to);
 
   return (
     <div className="space-y-6">
@@ -52,7 +60,7 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {showPace && (
-          <PaceTile branchId={branchId} month={kind === "pastmonth" ? from : null} />
+          <PaceTile branchId={branchId} month={paceMonth} />
         )}
         <SalesTrendTile branchId={branchId}
           from={trendRange ? from : null} to={trendRange ? to : null} />

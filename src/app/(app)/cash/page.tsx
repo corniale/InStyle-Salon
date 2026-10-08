@@ -344,7 +344,8 @@ function BranchCashSection({ branchId, branchName, showName, from, to, single }:
               <div className="text-[11px] text-text-muted">
                 {!single ? (
                   <>
-                    Totals across the period. Pick a single date to count and close a drawer.
+                    Totals across the period. To count and close a drawer, view one day:
+                    tap Today, or set From and To to the same date.
                     {(day?.discounts_cents ?? 0) > 0 &&
                       ` Discounts given: ${formatCentavos(day?.discounts_cents ?? 0)} (already off gross).`}
                   </>

@@ -1,17 +1,19 @@
 "use client";
 
-// Shared period filter: Today · This month · Year to date, plus either a
-// single-date picker (Dashboard, Daily cash) or a from/to pair (Technicians),
-// and optionally the past-months dropdown. Every analytics-style page uses
-// this same control so the filters read identically everywhere.
+// Shared period filter: Today · This month · Year to date (optionally All
+// time and the past-months dropdown), plus a from/to pair on every page —
+// a single day is simply from = to. Every date-filtered page uses this same
+// control so the filters read identically everywhere.
 
 import { DateInput } from "@/components/date-input";
 
 export interface Period {
-  kind: "today" | "month" | "ytd" | "day" | "pastmonth" | "range";
-  from: string; // inclusive ISO date
-  to: string;   // inclusive ISO date
+  kind: "today" | "month" | "ytd" | "pastmonth" | "range" | "all";
+  from: string; // inclusive ISO date; "" = no lower bound (only with "all")
+  to: string;   // inclusive ISO date; "" = no upper bound (only with "all")
 }
+
+export const ALL_TIME: Period = { kind: "all", from: "", to: "" };
 
 export function todayISO(): string {
   return new Date().toLocaleDateString("sv-SE");
@@ -57,20 +59,31 @@ function pastMonths(): Array<[string, string]> {
   return out;
 }
 
-export function PeriodPicker({ value, onChange, withPastMonths, withRange }: {
+export function PeriodPicker({ value, onChange, withPastMonths, withAll }: {
   value: Period;
   onChange: (p: Period) => void;
   /** Adds the "Past month…" dropdown (Dashboard). */
   withPastMonths?: boolean;
-  /** From/to inputs instead of a single-date input (Technicians). */
-  withRange?: boolean;
+  /** Adds an "All time" preset; either bound may then stay open. */
+  withAll?: boolean;
 }) {
   const presets: Array<["today" | "month" | "ytd", string]> = [
     ["today", "Today"], ["month", "This month"], ["ytd", "Year to date"],
   ];
+  const today = todayISO();
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       <div className="flex rounded-[4px] border border-border">
+        {withAll && (
+          <button
+            onClick={() => onChange(ALL_TIME)}
+            className={`h-8 px-3 text-[13px] ${
+              value.kind === "all" ? "bg-ink font-bold text-white" : "hover:bg-surface-page"
+            }`}
+          >
+            All time
+          </button>
+        )}
         {presets.map(([k, label]) => (
           <button
             key={k}
@@ -104,25 +117,36 @@ export function PeriodPicker({ value, onChange, withPastMonths, withRange }: {
         )}
       </div>
 
-      {withRange ? (
-        <div className="flex items-center gap-2">
-          <DateInput className="w-36 shrink-0" value={value.from} aria-label="From"
-            onChange={(from) =>
-              onChange({ kind: "range", from, to: value.to < from ? from : value.to })} />
-          <span className="text-[13px] text-text-muted">to</span>
-          <DateInput className="w-36 shrink-0" value={value.to} aria-label="To"
-            onChange={(to) =>
-              onChange({ kind: "range", from: value.from > to ? to : value.from, to })} />
-        </div>
-      ) : (
-        <DateInput
-          className="w-36 shrink-0"
-          value={value.kind === "day" ? value.from : ""}
-          max={todayISO()}
-          aria-label="Date"
-          onChange={(d) => onChange({ kind: "day", from: d, to: d })}
-        />
-      )}
+      {/* From/to on every page. While a single day is shown (Today, or
+          from = to), changing "from" moves the whole view to that day — the
+          old single-date behaviour, which closing a cash drawer relies on;
+          changing "to" then widens it into a range. A "from" after "to" (or
+          a "to" before "from") moves the other side with it. Under "All
+          time" the untouched side stays open-ended. */}
+      <div className="flex items-center gap-2">
+        <DateInput className="w-36 shrink-0" value={value.from} max={today}
+          aria-label="From"
+          onChange={(from) => onChange({
+            kind: "range",
+            from,
+            to: value.to === "" ? ""
+              : value.from === value.to || value.to < from ? from : value.to,
+          })} />
+        <span className="text-[13px] text-text-muted">to</span>
+        <DateInput className="w-36 shrink-0" value={value.to} max={today}
+          aria-label="To"
+          onChange={(to) => onChange({
+            kind: "range",
+            from: value.from === "" ? "" : value.from > to ? to : value.from,
+            to,
+          })} />
+      </div>
     </div>
   );
+}
+
+/** First and last day when the period is exactly one calendar month. */
+export function wholeMonth(p: Period): string | null {
+  if (!p.from || !p.to || !p.from.endsWith("-01")) return null;
+  return p.to === monthEndISO(p.from.slice(0, 7)) ? p.from : null;
 }
