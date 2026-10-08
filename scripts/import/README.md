@@ -5,9 +5,17 @@ into one paste-ready SQL file for the Supabase SQL editor:
 
 ```sh
 pip install openpyxl
-python3 -I scripts/import/xlsx_to_sql.py -o import.sql \
+python3 -I scripts/import/xlsx_to_sql.py --split -o import.sql \
   MAIN_DAILY_SERVICE_SALES_REPORT_09.2026.xlsx BRANCH_DAILY_SERVICE_SALES_REPORT_09.2026.xlsx
 ```
+
+`--split` writes one file per branch-month (`import_part1_MAIN_2026-09.sql`,
+…). Use it for anything over about a month per branch: the SQL editor
+refuses queries around 1 MB ("Query is too large to be run via the SQL
+Editor"), and a branch-month is roughly 300–450 KB. Always generate every
+part of a batch in ONE run — batch-wide decisions (each phone's client
+name, names shared by two phones) are embedded in every part, so parts
+can run in any order and still end in exactly the single-file state.
 
 The generated SQL holds client names and phone numbers: never commit it.
 Compare the expected totals it prints with the verification query at the
