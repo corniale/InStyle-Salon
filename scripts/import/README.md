@@ -1,4 +1,30 @@
-# January–July 2026 history import
+# Monthly workbook import (current path)
+
+`xlsx_to_sql.py` turns the salon's DAILY SERVICE SALES REPORT workbooks
+into one paste-ready SQL file for the Supabase SQL editor:
+
+```sh
+pip install openpyxl
+python3 -I scripts/import/xlsx_to_sql.py -o import.sql \
+  MAIN_DAILY_SERVICE_SALES_REPORT_09.2026.xlsx BRANCH_DAILY_SERVICE_SALES_REPORT_09.2026.xlsx
+```
+
+The generated SQL holds client names and phone numbers: never commit it.
+Compare the expected totals it prints with the verification query at the
+end of the run. Rules the converter follows (Aug–Sep 2026 batch onward):
+
+- Shares are fitted to the 0034 share trigger: the workbook's TECHNICIAN
+  SHARE is reproduced exactly and discounts come out of the company side.
+- Services resolve by name within the business (0025: one name, one
+  service); renamed services are mapped in `SERVICE_ALIASES`.
+- Tickets attach to the surviving client of any merge; a new phone record
+  whose name matches exactly one name-only record absorbs it.
+- Imports never deactivate catalogue rows and never overwrite targets
+  (pass `--set-targets` to apply the dashboard figure deliberately).
+- Before importing, void any app-entered test tickets in the same months,
+  or they double-count against the workbook.
+
+# January–July 2026 history import (CSV path, superseded)
 
 Imports the two existing workbooks (exported to CSV) into the database.
 Server-side only: it uses the service-role key from the environment and must

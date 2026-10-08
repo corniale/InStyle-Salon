@@ -35,8 +35,31 @@ from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from openpyxl import load_workbook
+import openpyxl.worksheet._reader as _xl_reader
+
+# Some PHONE NUMBER cells carry a date format (Aug 2026 onward). A phone
+# like 9171234567 is far past Excel's last date, so openpyxl replaces the
+# value with "#VALUE!" and the number is lost. Real dates never overflow,
+# so on overflow hand back the raw serial and let phone_norm read it.
+_xl_from_excel = _xl_reader.from_excel
+
+def _from_excel_keep_raw(value, *args, **kwargs):
+    try:
+        return _xl_from_excel(value, *args, **kwargs)
+    except (OverflowError, ValueError):
+        return value
+
+_xl_reader.from_excel = _from_excel_keep_raw
 
 TYPE_MAP = {"HAIR": "Hair", "NAILS": "Nail & Foot", "OTHERS": "Others"}
+
+# Catalogue names merged away after earlier imports (0026). The workbooks
+# still use the old spellings; without this map an import would resurrect
+# the deleted duplicates.
+SERVICE_ALIASES = {
+    "MANICURE CLEANING": "MANICURE (CLEANING)",
+    "PEDICURE CLEANING": "PEDICURE (CLEANING)",
+}
 
 def q(s):
     """SQL string literal."""
@@ -100,8 +123,12 @@ def read_file(path, branch):
         "service": col("SERVICE"), "type": col("TYPE OF SERVICE"),
         "amount": col("AMOUNT"), "no": col("NO.", "QTY"), "total": col("TOTAL AMOUNT"),
         "sharing": col("SHARING"), "company": col("COMPANY SHARE"),
+        # Aug 2026 onward: the technician's peso share is its own column.
+        "techshare": col("TECHNICIAN SHARE", optional=True),
         "tech": col("TECHNICIAN"),
-        "assist": col("ASSIST", "ASSIST (BANLAW)", "MINUS ASSIST", optional=True),
+        # ASSIST AMT (Aug 2026 onward) is the positive peso amount; MINUS
+        # ASSIST became its negative mirror at the same time.
+        "assist": col("ASSIST AMT", "ASSIST", "ASSIST (BANLAW)", "MINUS ASSIST", optional=True),
         "rate": col("RATE"),
         # June 2026 onward: the salon upgraded its own tracking.
         "series": col("SERIES NO.", optional=True),
@@ -149,6 +176,10 @@ def read_file(path, branch):
         total = r[ix["total"]]
         if not isinstance(total, (int, float)):
             continue
+        # Pre-filled formula rows below the day's entries: zero total and
+        # nothing typed. Not data, not worth a "skipped" line each.
+        if total == 0 and not r[ix["service"]] and not r[ix["tech"]]:
+            continue
         d = r[ix["date"]]
         if isinstance(d, datetime):
             d = d.date()
@@ -187,15 +218,17 @@ def read_file(path, branch):
                 str(r[ix["oldnew"]]).strip().upper() if r[ix["oldnew"]] else None),
             "source": str(r[ix["source"]]).strip() if r[ix["source"]] else None,
             "referred": str(r[ix["referred"]]).strip() if r[ix["referred"]] else None,
-            "service": norm_name(service),
+            "service": SERVICE_ALIASES.get(norm_name(service), norm_name(service)),
             "type": TYPE_MAP.get(norm_name(r[ix["type"]]) if r[ix["type"]] else "", None),
             "sharing_label": str(r[ix["sharing"]]).strip() if r[ix["sharing"]] else None,
             "qty": qty,
             "amount_cents": int(round(float(amount) * 100)) if isinstance(amount, (int, float)) else None,
             "total_cents": int(round(float(total) * 100)),
             "company_cents": int(round(float(company) * 100)) if isinstance(company, (int, float)) else None,
+            "techshare_cents": int(round(float(opt(r, "techshare")) * 100))
+                if isinstance(opt(r, "techshare"), (int, float)) else None,
             "tech": norm_name(tech),
-            "assist_cents": int(round(float(opt(r, "assist")) * 100))
+            "assist_cents": abs(int(round(float(opt(r, "assist")) * 100)))
                 if isinstance(opt(r, "assist"), (int, float)) else None,
             "rating": rating,
             "branch": branch,
@@ -219,6 +252,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
     ap.add_argument("-o", "--output", default="import_history.sql")
+    ap.add_argument("--set-targets", action="store_true",
+                    help="overwrite branch targets with the latest dashboard figure")
     args = ap.parse_args()
 
     all_rows, all_skipped = [], []
@@ -247,18 +282,12 @@ def main():
             c = type_by_service.get(r["service"])
             r["type"] = c.most_common(1)[0][0] if c else "Others"
 
-    # Fit the sharing rate per line so generated company share is exact.
-    unfit = 0
+    # Company share absent: assume 50-50, reported. (The sharing rate itself
+    # is fitted further down, once each line's undiscounted gross is known.)
     for r in all_rows:
-        company = r["company_cents"]
-        if company is None:
-            company = round(r["total_cents"] / 2)  # absent: assume 50-50, reported
-            r["company_cents"] = company
+        if r["company_cents"] is None:
+            r["company_cents"] = round(r["total_cents"] / 2)
             r["company_assumed"] = True
-        rate, ok = fit_rate(company, r["total_cents"])
-        r["rate6"] = f"{rate:.6f}"
-        if not ok:
-            unfit += 1
 
     # Ticket keys: the source's own series number is the strongest grouping
     # (June onward); before that, named rows group per (branch, date, name);
@@ -354,6 +383,32 @@ def main():
                               if r["alloc_disc_cents"] > 0
                               else ("negotiated" if negotiated > 0 else None))
 
+    # Sharing rate, fitted to the database's share trigger (0034):
+    #   technician = qty*unit - round(qty*unit * rate)   (undiscounted)
+    #   company    = total - technician                  (absorbs discounts)
+    # The workbook's TECHNICIAN SHARE is the commission actually paid, so
+    # the rate is fitted to reproduce it exactly; the company share then
+    # follows as collected minus commission — the salon's own practice
+    # (discounts come out of the company side). Older files without the
+    # column derive it as TOTAL AMOUNT - COMPANY SHARE.
+    unfit = 0
+    share_typos = []
+    for r in all_rows:
+        gross_db = r["unit_cents"] * r["qty"]
+        tech = r["techshare_cents"]
+        if tech is None:
+            tech = r["total_cents"] - r["company_cents"]
+        elif r["company_cents"] + tech != r["total_cents"]:
+            # COMPANY + TECHNICIAN != TOTAL on the sheet: a typo in one
+            # cell. The commission paid is the figure kept.
+            share_typos.append(r)
+        tech = max(0, min(tech, gross_db))
+        r["tech_cents"] = tech
+        rate, ok = fit_rate(gross_db - tech, gross_db)
+        r["rate6"] = f"{rate:.6f}"
+        if not ok:
+            unfit += 1
+
     # Per-service defaults: modal sharing rate, and one canonical type per
     # service name — the source files a service under different types on a
     # handful of rows (SHAVE under HAIR and NAILS), and a split identity
@@ -373,20 +428,23 @@ def main():
             price_votes[(r["branch"], r["service"])][r["unit_cents"]] += 1
     modal_price = {k: c.most_common(1)[0][0] for k, c in price_votes.items()}
 
-    # Validation expectations per branch-month. Revenue is NET of ticket
-    # discounts (what was collected); company share is the fitted rate applied
-    # to net, mirroring the database's generated column. The workbook's own
-    # gross figures are carried alongside for the report.
-    expect = defaultdict(lambda: {"revenue": 0, "company": 0, "treatments": 0, "rows": 0,
-                                  "gross": 0, "discounts": 0, "company_gross": 0, "online": 0})
+    # Validation expectations per branch-month, mirroring the share trigger
+    # exactly: revenue is NET of ticket discounts (what was collected), the
+    # technician share is computed on the undiscounted line, and the company
+    # share is the remainder. The workbook's own gross figures ride along.
+    expect = defaultdict(lambda: {"revenue": 0, "company": 0, "tech": 0, "treatments": 0,
+                                  "rows": 0, "gross": 0, "discounts": 0,
+                                  "company_gross": 0, "online": 0})
     assist_total = defaultdict(int)
     for r in all_rows:
         k = (r["branch"], r["date"].strftime("%Y-%m"))
         net = r["net_cents"]
-        exp_company = int((Decimal(net) * Decimal(r["rate6"])).quantize(
+        gross_db = r["unit_cents"] * r["qty"]
+        exp_tech = gross_db - int((Decimal(gross_db) * Decimal(r["rate6"])).quantize(
             Decimal("1"), rounding=ROUND_HALF_UP))
         expect[k]["revenue"] += net
-        expect[k]["company"] += exp_company
+        expect[k]["tech"] += exp_tech
+        expect[k]["company"] += net - exp_tech
         expect[k]["gross"] += r["total_cents"]
         expect[k]["discounts"] += r["alloc_disc_cents"]
         expect[k]["company_gross"] += r["company_cents"]
@@ -458,11 +516,14 @@ drop table if exists _ctx;
 create temp table _ctx as
 select
   (select id from businesses where code = 'SALON') as biz,
-  (select id from profiles where role = 'owner' order by created_at limit 1) as owner;
+  -- Imports are credited to the first owner/admin account — the one that
+  -- ran every batch so far — not to whoever holds the Owner title today.
+  (select id from profiles where role in ('owner', 'admin')
+   order by created_at limit 1) as owner;
 
 do $$ begin
   if (select owner from _ctx) is null then
-    raise exception 'No owner profile exists yet. Create the owner account first.';
+    raise exception 'No owner or admin profile exists yet. Create one first.';
   end if;
 end $$;
 
@@ -482,11 +543,18 @@ drop table if exists _svc;
 create temp table _svc (name text, stype text, rate numeric(8,6));
 insert into _svc values\n{svc_values};
 
+-- A service name is unique per business across types (0025 trigger), so
+-- only names the catalogue lacks entirely are created; an existing service
+-- keeps its type even when a workbook row files it elsewhere.
 insert into services (service_type_id, name, default_sharing_rate, default_duration_min)
 select st.id, v.name, round(v.rate, 3), 45
 from _svc v
 join service_types st on st.name = v.stype and st.business_id = (select biz from _ctx)
-on conflict (service_type_id, name) do nothing;
+where not exists (
+  select 1 from services s
+  join service_types st2 on st2.id = s.service_type_id
+  where st2.business_id = (select biz from _ctx) and lower(s.name) = lower(v.name)
+);
 """)
 
     w("""
@@ -517,11 +585,9 @@ where b.id = t.branch_id and b.business_id = (select biz from _ctx)
                       'Elmer Padilla','Fely Baldoza','Grace Nolasco','Hazel Villar','Ivy Marquez')
   and not exists (select 1 from ticket_lines tl where tl.technician_id = t.id);
 
-update services s set active = false
-from service_types st
-where st.id = s.service_type_id and st.business_id = (select biz from _ctx)
-  and s.name not in (select name from _svc)
-  and not exists (select 1 from ticket_lines tl where tl.service_id = s.id);
+-- (Earlier batches also retired catalogue rows absent from the history.
+-- No longer: the owner now adds services in Settings ahead of their first
+-- sale, and an import must never switch those off.)
 
 -- Pooled walk-in client per branch (money counts, retention excludes)
 insert into clients (phone, phone_declined, full_name, is_pool)
@@ -530,6 +596,13 @@ from branches b
 where b.business_id = (select biz from _ctx)
   and b.code in (select distinct branch from _imp)
 on conflict (phone) do nothing;
+
+-- Phones the database already knew before this batch: the same-name merge
+-- at the end only ever applies to records this batch creates.
+drop table if exists _pre_phones;
+create temp table _pre_phones as
+select c.phone from clients c
+where c.phone in (select distinct phone from _imp where phone is not null);
 
 -- Clients with a real phone number (July 2026 onward): phone is the
 -- identity, exactly as the product's own rule says.
@@ -547,7 +620,10 @@ from (
 order by v.phone, (v.cname is null), seq
 on conflict (phone) do nothing;
 
--- Named clients without a phone: identity is the normalised name.
+-- Named clients without a phone: identity is the normalised name. Only
+-- rows that genuinely lack a phone: a name seen solely with a phone would
+-- otherwise get an empty name-only twin (the July batch left ~700 such
+-- orphans, later merged away by hand).
 insert into clients (phone, phone_declined, full_name, barangay, town, inquiry_source,
                      first_visit_on, notes)
 select
@@ -565,7 +641,7 @@ from (
     first_value(isource) over w as isource,
     first_value(referred) over w as referred,
     min(tdate) over (partition by upper(cname)) as first_date
-  from _imp where cname is not null
+  from _imp where cname is not null and phone is null
   window w as (partition by upper(cname) order by (brgy is null), seq
                rows between unbounded preceding and unbounded following)
 ) v
@@ -614,7 +690,9 @@ ins as (
                        is_new_client, idempotency_key, created_by)
   select
     b.id,
-    coalesce(ph.id, nc.id, pc.id),
+    -- Merged records stay behind as pointers; history belongs on the
+    -- survivor, or an import would quietly undo past merges.
+    surviving_client(coalesce(ph.id, nc.id, pc.id)),
     h.tdate,
     -- Service times arrive July onward; bad orderings are dropped, not fatal.
     case when h.tstart is not null
@@ -650,11 +728,14 @@ select
   row_number() over (partition by nt.id order by i.seq)
 from _imp i
 join _new_tickets nt on nt.idempotency_key = i.ticket_key
--- Lines resolve their service through the canonical mapping, not the row's
--- own type column, so a SHAVE filed under NAILS still lands on SHAVE.
-join _svc sv on sv.name = i.service
-join service_types st on st.name = sv.stype and st.business_id = (select biz from _ctx)
-join services s on s.service_type_id = st.id and s.name = sv.name
+-- Lines resolve their service by name within the business — the name is
+-- the identity (0025) — so a SHAVE filed under NAILS still lands on SHAVE.
+join lateral (
+  select s.id from services s
+  join service_types st on st.id = s.service_type_id
+  where st.business_id = (select biz from _ctx) and lower(s.name) = lower(i.service)
+  limit 1
+) s on true
 join branches b on b.code = i.branch and b.business_id = (select biz from _ctx)
 join lateral (
   select t.id from technicians t
@@ -702,6 +783,39 @@ begin
     raise exception 'Import aborted: % tickets have lines that do not equal their payment.', v_bad;
   end if;
 end $$;
+
+-- Same-name merge, as applied to the earlier history: a person who first
+-- appears with a phone in this batch, and whose name matches exactly one
+-- name-only record (and exactly one phone record — this one), has that
+-- name-only history folded into the phone record. Ambiguous names are
+-- left alone for a human.
+drop table if exists _merged;
+create temp table _merged (loser uuid, winner uuid, name text);
+
+insert into _merged
+select nm.id, ph.id, ph.full_name
+from clients ph
+join (select distinct phone from _imp where phone is not null) ip on ip.phone = ph.phone
+join clients nm
+  on nm.phone like 'WALKIN-N-%' and not nm.is_pool and nm.merged_into_id is null
+ and upper(btrim(nm.full_name)) = upper(btrim(ph.full_name))
+where ph.merged_into_id is null
+  and ph.full_name is not null
+  and ph.phone not in (select phone from _pre_phones)
+  and (select count(*) from clients n2
+       where n2.phone like 'WALKIN-N-%' and not n2.is_pool and n2.merged_into_id is null
+         and upper(btrim(n2.full_name)) = upper(btrim(ph.full_name))) = 1
+  and (select count(*) from clients p2
+       where p2.phone !~ '^WALKIN' and p2.merged_into_id is null
+         and upper(btrim(p2.full_name)) = upper(btrim(ph.full_name))) = 1;
+
+do $$
+declare r record;
+begin
+  for r in select loser, winner from _merged loop
+    perform merge_clients(r.loser, r.winner);
+  end loop;
+end $$;
 """)
 
     price_values = ",\n".join(
@@ -721,25 +835,34 @@ join services s on s.service_type_id = st.id and s.name = p.service
 on conflict (branch_id, service_id, effective_from) do nothing;
 
 """)
-    for branch, (month, cents) in sorted(targets.items()):
-        w(f"""-- Target from the {branch} {month} dashboard
+    # Targets are the owner's to set in Settings now; the dashboard figure
+    # only overwrites them when asked for explicitly.
+    if args.set_targets:
+        for branch, (month, cents) in sorted(targets.items()):
+            w(f"""-- Target from the {branch} {month} dashboard
 update branches set monthly_target_cents = {cents}
 where business_id = (select biz from _ctx) and code = {q(branch)};""")
 
-    w("""
+    months = sorted({r["date"].strftime("%Y-%m") for r in all_rows})
+    month_list = ", ".join(q(m) for m in months)
+    w(f"""
 -- ---------------------------------------------------------------------------
--- Verification: these totals must match the workbook dashboards exactly.
+-- Verification: these totals must match the expected figures printed by
+-- the converter exactly (sales = collected after discounts).
 -- ---------------------------------------------------------------------------
 select b.code as branch,
        to_char(t.ticket_date, 'YYYY-MM') as month,
        sum(tl.total_cents) / 100.0 as sales,
        sum(tl.company_share_cents) / 100.0 as company_share,
+       sum(tl.technician_share_cents) / 100.0 as technician_share,
        sum(tl.qty) as treatments,
-       count(distinct t.id) as tickets
+       count(distinct t.id) as tickets,
+       (select count(*) from _merged) as clients_merged_by_name
 from tickets t
 join branches b on b.id = t.branch_id
 join ticket_lines tl on tl.ticket_id = t.id
 where t.idempotency_key like 'import:%' and t.voided_at is null
+  and to_char(t.ticket_date, 'YYYY-MM') in ({month_list})
 group by 1, 2 order by 1, 2;""")
 
     with open(args.output, "w") as f:
@@ -750,14 +873,26 @@ group by 1, 2 order by 1, 2;""")
     print("\nExpected totals (compare with the verification query output):", file=sys.stderr)
     for (branch, month), e in sorted(expect.items()):
         print(f"  {branch:6s} {month}  sales(net) {e['revenue']/100:>12,.2f}  "
-              f"company {e['company']/100:>12,.2f}  treatments {e['treatments']:>5}  "
-              f"rows {e['rows']}", file=sys.stderr)
+              f"company {e['company']/100:>12,.2f}  technician {e['tech']/100:>11,.2f}  "
+              f"treatments {e['treatments']:>5}  rows {e['rows']}", file=sys.stderr)
         if e['discounts'] or e['online']:
             print(f"         gross {e['gross']/100:>12,.2f}  discounts {e['discounts']/100:>10,.2f}  "
                   f"online {e['online']/100:>10,.2f}  company-if-gross {e['company_gross']/100:>12,.2f}",
                   file=sys.stderr)
     if unfit:
         print(f"\nWARNING: {unfit} lines could not fit an exact sharing rate", file=sys.stderr)
+    if share_typos:
+        print(f"\nSheet typos (COMPANY + TECHNICIAN != TOTAL) — technician share kept, "
+              f"company derived:", file=sys.stderr)
+        for r in share_typos:
+            print(f"  {r['branch']} {r['date']} {r['service']}: total {r['total_cents']/100:,.2f}, "
+                  f"sheet company {r['company_cents']/100:,.2f}, "
+                  f"technician {r['techshare_cents']/100:,.2f}", file=sys.stderr)
+    if not args.set_targets and targets:
+        print("\nDashboard targets (NOT applied; pass --set-targets to overwrite):",
+              file=sys.stderr)
+        for branch, (month, cents) in sorted(targets.items()):
+            print(f"  {branch:6s} {month}  {cents/100:,.2f}", file=sys.stderr)
     assumed = sum(1 for r in all_rows if r.get("company_assumed"))
     if assumed:
         print(f"NOTE: {assumed} lines had no company share; assumed 50%", file=sys.stderr)
